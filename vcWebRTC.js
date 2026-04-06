@@ -4,7 +4,7 @@ var peer = null;
 var peerList = [];
 let localStream = null;
 let estaSilenciadoGlobal = false; 
-let baneadoLocal = false; // <-- NUEVO: Estado de baneo para este cliente
+let baneadoLocal = false;
 
 const llamada = document.getElementById("llamada");
 const btnHablar = document.getElementById('btn-hablar');
@@ -15,7 +15,6 @@ let listaUsuarios = [];
 const TECLA_PTT = " "; 
 let teclaPresionada = false;
 
-// --- INICIALIZACIÓN ---
 
 socket.on('listaSockets', (lista) => {
     listaUsuarios = lista;
@@ -32,7 +31,6 @@ window.init = function (userid) {
     listenToCall();
 }
 
-// --- GESTIÓN DE MEDIA ---
 
 function obtenerMedia() {
     return new Promise((resolve, reject) => {
@@ -55,10 +53,8 @@ function obtenerMedia() {
     });
 }
 
-// --- LÓGICA DE CONTROL DEL MICRÓFONO (PTT) ---
 
 function activarMicrofono() {
-    // Si está baneado, bloqueamos la activación del micro por completo
     if (baneadoLocal) {
         if (btnHablar) {
             btnHablar.innerText = "¡BLOQUEADO!";
@@ -77,13 +73,10 @@ function activarMicrofono() {
 function desactivarMicrofono() {
     if (localStream) {
         localStream.getAudioTracks()[0].enabled = false;
-        // Si no está baneado, vuelve al color normal. Si está baneado, mantiene el color de bloqueo.
         btnHablar.style.backgroundColor = baneadoLocal ? "#b0bec5" : ""; 
         btnHablar.innerText = baneadoLocal ? "¡BLOQUEADO!" : "Pulsar para Hablar";
     }
 }
-
-// --- EVENTOS DE CONTROL ---
 
 document.addEventListener('keydown', (e) => {
     if (e.key === TECLA_PTT && !teclaPresionada) {
@@ -107,9 +100,7 @@ if (btnHablar) {
     btnHablar.addEventListener('touchend', (e) => { e.preventDefault(); desactivarMicrofono(); });
 }
 
-// --- SISTEMA DE SILENCIO Y BANEO ---
 
-// 1. Escuchar cuando otros deben ser silenciados (Orden del servidor)
 socket.on('comando_silenciar', (idUsuarioMalportado) => {
     const elAudio = document.getElementById(`audio-${idUsuarioMalportado}`);
     if (elAudio) {
@@ -119,18 +110,14 @@ socket.on('comando_silenciar', (idUsuarioMalportado) => {
     }
 });
 
-// 2. Escuchar si YO he sido baneado (Notificación del sistema)
 socket.on('notificacion_sistema', (msg) => {
-    // Si el mensaje indica que yo fui silenciado (puedes filtrar por texto si es necesario)
     baneadoLocal = true;
-    estaSilenciadoGlobal = true; // Forzamos silencio
-    desactivarMicrofono(); // Cerramos el micro de inmediato si estaba abierto
+    estaSilenciadoGlobal = true;
+    desactivarMicrofono(); 
     
-    if (btnMute) btnMute.disabled = true; // Bloqueamos también el botón de Mute
+    if (btnMute) btnMute.disabled = true; 
     console.error("Acceso a micrófono restringido por el sistema.");
 });
-
-// --- LÓGICA PEERJS ---
 
 function listenToCall() {
     peer.on('call', (call) => {
@@ -163,11 +150,10 @@ function gestionarNuevoStream(stream, peerID) {
     }
 }
 
-// --- BOTÓN MUTE GLOBAL ---
 
 if (btnMute) {
     btnMute.addEventListener('click', () => {
-        if (!localStream || baneadoLocal) return; // Si está baneado no puede desmutearse
+        if (!localStream || baneadoLocal) return;
 
         estaSilenciadoGlobal = !estaSilenciadoGlobal;
         if (estaSilenciadoGlobal) {
@@ -183,7 +169,6 @@ if (btnMute) {
     });
 }
 
-// --- DOM HELPERS ---
 
 function addLocalAudio(stream) {
     if (document.getElementById('local-audio')) return;

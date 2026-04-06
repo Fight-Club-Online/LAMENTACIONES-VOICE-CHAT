@@ -5,7 +5,6 @@ const form = document.getElementById('form');
 const input = document.getElementById('input');
 const messages = document.getElementById('messages');
 
-// --- SISTEMA DE BANEO DE PALABRAS (CLIENT-SIDE) ---
 const palabrasProhibidas = ["tonto", "feo", "spam", "maldito", "idiota"];
 
 /**
@@ -25,20 +24,17 @@ form.addEventListener('submit', (e) => {
     e.preventDefault();
     
     if (input.value.trim()) {
-        // Ojo: Enviamos el texto original al servidor para que el servidor 
-        // pueda decidir si silenciar o no al usuario por su conducta.
         const textoOriginal = input.value;
         
         socket.emit('chat message', {
             id: socket.id,
-            texto: textoOriginal // El servidor se encargará de censurarlo antes de repartirlo
+            texto: textoOriginal
         });
         
         input.value = '';
     }
 });
 
-// --- RECEPCIÓN DE MENSAJES DE CHAT ---
 socket.on('chat message', (msg) => {
     if (!msg || !msg.id) return;
 
@@ -46,7 +42,6 @@ socket.on('chat message', (msg) => {
     const esMio = msg.id === socket.id;
     const remitente = esMio ? "Tú" : `Usuario (${msg.id.substring(0, 5)})`;
     
-    // Estilos dinámicos
     item.style.padding = "10px 15px";
     item.style.marginBottom = "8px";
     item.style.borderRadius = "12px";
@@ -72,15 +67,12 @@ socket.on('chat message', (msg) => {
     scrollAlFinal();
 });
 
-// --- NUEVO: RECEPTOR DE NOTIFICACIONES DEL SISTEMA ---
-// Este escucha el socket.emit('notificacion_sistema', ...) del servidor
 socket.on('notificacion_sistema', (data) => {
     const item = document.createElement('li');
     item.style.textAlign = "center";
     item.style.margin = "15px 0";
     item.style.listStyle = "none";
     
-    // Estilo tipo "Badge" de advertencia
     item.innerHTML = `
         <span style="background-color: #ffebee; color: #c62828; padding: 5px 15px; border-radius: 20px; font-size: 0.85rem; border: 1px solid #ffcdd2; font-style: italic;">
             ⚠️ <strong>Sistema:</strong> ${data}
@@ -91,7 +83,6 @@ socket.on('notificacion_sistema', (data) => {
     scrollAlFinal();
 });
 
-// --- FUNCIÓN DE AUTO-SCROLL ---
 function scrollAlFinal() {
     window.scrollTo({
         top: document.body.scrollHeight,

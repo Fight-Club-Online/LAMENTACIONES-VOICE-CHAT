@@ -4,7 +4,7 @@ var peer = null;
 var peerList = [];
 let localStream = null;
 let estaSilenciadoGlobal = false; 
-let baneadoLocal = false;
+let baneadoLocal = false; // Estado de baneo por conducta
 
 const llamada = document.getElementById("llamada");
 const btnHablar = document.getElementById('btn-hablar');
@@ -15,6 +15,7 @@ let listaUsuarios = [];
 const TECLA_PTT = " "; 
 let teclaPresionada = false;
 
+// --- INICIALIZACIÓN ---
 
 socket.on('listaSockets', (lista) => {
     listaUsuarios = lista;
@@ -31,6 +32,7 @@ window.init = function (userid) {
     listenToCall();
 }
 
+// --- GESTIÓN DE MEDIA (AUDIO) ---
 
 function obtenerMedia() {
     return new Promise((resolve, reject) => {
@@ -53,6 +55,7 @@ function obtenerMedia() {
     });
 }
 
+// --- LÓGICA DE CONTROL DEL MICRÓFONO (PTT) ---
 
 function activarMicrofono() {
     if (baneadoLocal) {
@@ -78,6 +81,8 @@ function desactivarMicrofono() {
     }
 }
 
+// --- EVENTOS DE TECLADO ---
+
 document.addEventListener('keydown', (e) => {
     if (e.key === TECLA_PTT && !teclaPresionada) {
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
@@ -93,6 +98,8 @@ document.addEventListener('keyup', (e) => {
     }
 });
 
+// --- EVENTOS DE MOUSE Y TOUCH ---
+
 if (btnHablar) {
     btnHablar.addEventListener('mousedown', activarMicrofono);
     btnHablar.addEventListener('mouseup', desactivarMicrofono);
@@ -100,6 +107,7 @@ if (btnHablar) {
     btnHablar.addEventListener('touchend', (e) => { e.preventDefault(); desactivarMicrofono(); });
 }
 
+// --- SISTEMA DE MODERACIÓN RECIBIDA ---
 
 socket.on('comando_silenciar', (idUsuarioMalportado) => {
     const elAudio = document.getElementById(`audio-${idUsuarioMalportado}`);
@@ -111,6 +119,7 @@ socket.on('comando_silenciar', (idUsuarioMalportado) => {
 });
 
 socket.on('notificacion_sistema', (msg) => {
+    // Si el mensaje indica un baneo, bloqueamos el PTT local
     baneadoLocal = true;
     estaSilenciadoGlobal = true;
     desactivarMicrofono(); 
@@ -118,6 +127,8 @@ socket.on('notificacion_sistema', (msg) => {
     if (btnMute) btnMute.disabled = true; 
     console.error("Acceso a micrófono restringido por el sistema.");
 });
+
+// --- LÓGICA DE LLAMADAS Y PEERJS ---
 
 function listenToCall() {
     peer.on('call', (call) => {
@@ -150,6 +161,7 @@ function gestionarNuevoStream(stream, peerID) {
     }
 }
 
+// --- BOTÓN MUTE MANUAL ---
 
 if (btnMute) {
     btnMute.addEventListener('click', () => {
@@ -169,6 +181,7 @@ if (btnMute) {
     });
 }
 
+// --- GESTIÓN DE AUDIO EN DOM ---
 
 function addLocalAudio(stream) {
     if (document.getElementById('local-audio')) return;
@@ -191,21 +204,30 @@ function addRemoteAudio(stream, peerID) {
     audio.srcObject = stream;
 }
 
+// --- INTERFAZ DE USUARIOS Y REPORTES ---
+
 function actualizarInterfazUsuarios() {
     if (!userUiList) return;
     userUiList.innerHTML = ''; 
 
     peerList.forEach(peerID => {
         const li = document.createElement('li');
+        li.style.padding = "10px";
+        li.style.borderBottom = "1px solid #444";
+        li.style.display = "flex";
+        li.style.alignItems = "center";
+        li.style.justifyContent = "space-between";
+
         const nombre = document.createElement('span');
         nombre.innerText = `User: ${peerID.substring(0, 6)}...`;
 
+        const containerButtons = document.createElement('div');
+
+        // Botón Silenciar (Local)
         const btnMuteInd = document.createElement('button');
         btnMuteInd.className = 'btn-small-mute';
-        
         const elAudio = document.getElementById(`audio-${peerID}`);
         const isMuted = elAudio ? elAudio.muted : false;
-
         btnMuteInd.innerText = isMuted ? "Escuchar" : "Silenciar";
         btnMuteInd.style.backgroundColor = isMuted ? "#ff9800" : "#607d8b";
 
@@ -217,8 +239,33 @@ function actualizarInterfazUsuarios() {
             }
         };
 
+        // Botón Reportar (MongoDB Atlas)
+        const btnReportar = document.createElement('button');
+        btnReportar.innerText = "Reportar";
+        btnReportar.style.backgroundColor = "#d32f2f";
+        btnReportar.style.color = "white";
+        btnReportar.style.marginLeft = "8px";
+        btnReportar.style.border = "none";
+        btnReportar.style.padding = "4px 8px";
+        btnReportar.style.borderRadius = "4px";
+        btnReportar.style.cursor = "pointer";
+
+        btnReportar.onclick = () => {
+            const motivo = prompt(`Motivo del reporte para ${peerID.substring(0, 5)}:`);
+            if (motivo && motivo.trim() !== "") {
+                socket.emit('enviar_reporte', {
+                    targetId: peerID,
+                    motivo: motivo
+                });
+                alert("Reporte enviado con éxito.");
+            }
+        };
+
+        containerButtons.appendChild(btnMuteInd);
+        containerButtons.appendChild(btnReportar);
+        
         li.appendChild(nombre);
-        li.appendChild(btnMuteInd);
+        li.appendChild(containerButtons);
         userUiList.appendChild(li);
     });
 }

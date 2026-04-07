@@ -5,6 +5,7 @@
     "type": "module",
     "dependencies": {
         "express": "^4.22.1",
+        "mongoose": "^9.4.1",
         "peerjs": "^1.4.7",
         "socket.io": "^4.8.3",
         "webrtc-adapter": "^9.0.4"

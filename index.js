@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { Server } from 'socket.io';
+import mongoose from 'mongoose';
 
 const app = express();
 const server = createServer(app);
@@ -13,87 +14,100 @@ const io = new Server(server, {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const lobby = "sala-principal"; 
 
+// --- 1. CONFIGURACIÓN DE MONGODB ATLAS ---
+const mongoURI = "mongodb+srv://pacoandres03_db_user:admin@blueteam.biz5ysx.mongodb.net/VOICE-CHAT?retryWrites=true&w=majority";
+
+mongoose.connect(mongoURI)
+    .then(() => console.log("✅ Conectado a MongoDB Atlas: VOICE-CHAT"))
+    .catch(err => console.error("❌ Error en conexión Mongo:", err));
+
+const Reporte = mongoose.model('Report', new mongoose.Schema({
+    emisorId: String,
+    targetId: String,
+    motivo: String,
+    fecha: { type: Date, default: Date.now }
+}), 'REPORT');
+
+// --- 2. SISTEMA DE BANEO (LÓGICA) ---
 const PALABRAS_BANEADAS = ["tonto", "feo", "estupido", "maldito", "idiota", "bobada"];
 
-/**
- * Procesa el mensaje: detecta infracciones y censura el texto.
- * Es vital que este proceso ocurra en el servidor para evitar bypasses.
- */
 function procesarMensaje(texto) {
     if (!texto) return { textoFiltrado: "", huboInfraccion: false };
-    
     let textoFiltrado = texto;
     let huboInfraccion = false;
 
     PALABRAS_BANEADAS.forEach(palabra => {
         const regex = new RegExp(`\\b${palabra}\\b`, 'gi');
-        
-        if (regex.test(texto)) {
-            huboInfraccion = true;
-        }
-        
+        if (regex.test(texto)) huboInfraccion = true;
         textoFiltrado = textoFiltrado.replace(regex, "****");
     });
-
     return { textoFiltrado, huboInfraccion };
 }
 
+// --- 3. SERVIDOR DE ARCHIVOS ESTÁTICOS ---
 app.use(express.static(__dirname));
-
 app.get("/", (req, res) => {
     res.sendFile(join(__dirname, 'index.html'));
 });
 
-
+// --- 4. LÓGICA DE SOCKET.IO ---
 io.on('connection', (socket) => {
     console.log(`Usuario conectado: ${socket.id}`);
-
     socket.join(lobby);
     actualizarYEnviarLista();
+
+    // Evento: Reportar Usuario (Guardado en Atlas)
+    socket.on('enviar_reporte', async (data) => {
+        try {
+            const nuevoReporte = new Reporte({
+                emisorId: socket.id,
+                targetId: data.targetId,
+                motivo: data.motivo
+            });
+            await nuevoReporte.save();
+            console.log(`[DB] Reporte guardado para el usuario: ${data.targetId}`);
+            socket.emit('notificacion_sistema', "Reporte registrado con éxito.");
+        } catch (error) {
+            console.error("Error al guardar reporte:", error);
+        }
+    });
+
+    // Evento: Chat y Moderación Automática
+    socket.on('chat message', (msg) => {
+        if (msg && msg.texto) {
+            const resultado = procesarMensaje(msg.texto);
+            msg.texto = resultado.textoFiltrado;
+
+            // Enviamos el mensaje (censurado) a todos
+            io.to(lobby).emit('chat message', msg);
+
+            // Si detectamos infracción, silenciamos al usuario
+            if (resultado.huboInfraccion) {
+                console.log(`[BAN] Silenciando a ${socket.id}`);
+                io.to(lobby).emit('comando_silenciar', socket.id);
+                socket.emit('notificacion_sistema', "Tu micrófono ha sido desactivado por conducta inapropiada.");
+            }
+        }
+    });
 
     socket.on('disconnect', () => {
         console.log(`Usuario desconectado: ${socket.id}`);
         actualizarYEnviarLista();
     });
-
-    /**
-     * Manejo centralizado de mensajes (Voz y Texto)
-     * Ambos llegan aquí bajo el evento 'chat message'
-     */
-    socket.on('chat message', (msg) => {
-        if (msg && msg.texto) {
-            const resultado = procesarMensaje(msg.texto);
-            
-            msg.texto = resultado.textoFiltrado;
-
-            io.to(lobby).emit('chat message', msg);
-
-            if (resultado.huboInfraccion) {
-                console.log(`[MODERACIÓN] Silenciando a ${socket.id} por infracción detectada.`);
-                io.to(lobby).emit('comando_silenciar', socket.id);
-                socket.emit('notificacion_sistema', "Has sido silenciado automáticamente por lenguaje inapropiado.");
-            }
-        }
-    });
-    socket.on('audioStream', (audioData) => {
-        socket.broadcast.emit('audioStream', audioData);
-    });
 });
 
+// --- 5. FUNCIONES AUXILIARES ---
 async function actualizarYEnviarLista() {
     try {
         const sockets = await io.in(lobby).fetchSockets();
         const listaSocks = sockets.map(s => s.id);
-        
-        io.in(lobby).emit('listaSockets', listaSocks);
-        console.log("Usuarios en línea:", listaSocks.length);
+        io.to(lobby).emit('listaSockets', listaSocks);
     } catch (error) {
-        console.error("Error al actualizar la lista de sockets:", error);
+        console.error("Error al actualizar lista:", error);
     }
 }
-const PORT = process.env.PORT || 3000;
+
+const PORT = 3000;
 server.listen(PORT, () => {
-    console.log(`\n--- Servidor de Ingeniería Listo ---`);
-    console.log(`Corriendo en: http://localhost:${PORT}`);
-    console.log(`Moderación activa con ${PALABRAS_BANEADAS.length} palabras clave.\n`);
+    console.log(`🚀 Servidor en http://localhost:${PORT}`);
 });

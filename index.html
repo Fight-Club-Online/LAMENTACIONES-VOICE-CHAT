@@ -4,79 +4,44 @@
     <meta name="viewport" content="width=device-width,initial-scale=1.0">
     <title>Chat Transcription & Voice</title>
     <style>
-      body { margin: 0; padding-bottom: 3rem; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f4f7f6; }
-
-      /* Panel de control de usuarios */
-      #user-control-panel {
-        background: #fff;
-        border-bottom: 2px solid #ddd;
-        padding: 10px;
-        position: sticky;
-        top: 0;
-        z-index: 100;
-        max-height: 150px;
-        overflow-y: auto;
-      }
+      /* Mantengo tu CSS para que los botones dinámicos no se vean desordenados */
+      body { margin: 0; padding-bottom: 3rem; font-family: sans-serif; background-color: #f4f7f6; }
+      #user-control-panel { background: #fff; border-bottom: 2px solid #ddd; padding: 10px; position: sticky; top: 0; z-index: 100; }
       #user-ui-list { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 10px; }
-      #user-ui-list li { 
-        background: #eceff1; 
-        padding: 5px 10px; 
-        border-radius: 20px; 
-        display: flex; 
-        align-items: center; 
-        font-size: 0.9rem;
-        border: 1px solid #cfd8dc;
-      }
-      .btn-small-mute {
-        margin-left: 8px;
-        border: none;
-        background: #607d8b;
-        color: white;
-        border-radius: 12px;
-        padding: 2px 8px;
-        cursor: pointer;
-        font-size: 0.75rem;
-      }
-
-      /* Chat y Mensajes */
-      #messages { list-style-type: none; margin: 0; padding: 10px; }
-      #messages > li { padding: 0.5rem 1rem; border-radius: 8px; margin-bottom: 5px; max-width: 80%; }
-      #messages > li:nth-child(odd) { background: #fff; border: 1px solid #eee; }
-      #messages > li:nth-child(even) { background: #e3f2fd; align-self: flex-end; margin-left: auto; }
-
-      /* Formulario Inferior */
-      #form { background: rgba(255, 255, 255, 0.9); padding: 0.5rem; position: fixed; bottom: 0; left: 0; right: 0; display: flex; height: 3.5rem; box-sizing: border-box; backdrop-filter: blur(10px); border-top: 1px solid #ccc; }
-      #input { border: 1px solid #ddd; padding: 0 1rem; flex-grow: 1; border-radius: 2rem; margin: 0.25rem; }
-      #input:focus { outline: none; border-color: #2196f3; }
+      #user-ui-list li { background: #eceff1; padding: 8px; border-radius: 10px; display: flex; align-items: center; border: 1px solid #cfd8dc; }
       
-      button { border: none; padding: 0 1rem; margin: 0.25rem; border-radius: 20px; cursor: pointer; color: #fff; font-weight: bold; transition: background 0.3s; }
+      #messages { list-style-type: none; margin: 0; padding: 10px; }
+      #form { background: white; padding: 0.5rem; position: fixed; bottom: 0; left: 0; right: 0; display: flex; border-top: 1px solid #ccc; }
+      #input { border: 1px solid #ddd; padding: 0 1rem; flex-grow: 1; border-radius: 2rem; }
+      button { border: none; padding: 0 1rem; margin: 0.25rem; border-radius: 10px; cursor: pointer; color: #fff; font-weight: bold; }
+      
       #form > button { background: #333; }
       #llamada { background: #4caf50; }
       #btn-hablar { background: #2196f3; }
       #btn-mute { background: #607d8b; }
-      
-      button:active { transform: scale(0.95); }
     </style>
   </head>
   <body>
     <div id="user-control-panel">
-      <small style="color: #666; font-weight: bold; display: block; margin-bottom: 5px;">CONTROLES DE LLAMADA:</small>
+      <small style="color: #666; font-weight: bold;">USUARIOS CONECTADOS:</small>
       <ul id="user-ui-list">
-        </ul>
+          </ul>
     </div>
 
     <ul id="messages"></ul>
 
     <form id="form" action="">
-      <input id="input" autocomplete="off" />
-      <button id="llamada" type="button">Llamada</button>
-      <button>Enviar</button>
+      <input id="input" autocomplete="off" placeholder="Escribe un mensaje..." />
+      <button id="llamada" type="button">Llamar a todos</button>
+      <button id="btn-enviar">Enviar</button>
       <button id="btn-hablar" type="button">Pulsar para Hablar</button>
-      <button id="btn-mute" type="button">Silenciar Micro</button>
+      <button id="btn-mute" type="button">Mute Local</button>
     </form>
 
     <script src="/socket.io/socket.io.js"></script>
-    <script src="/node_modules/peerjs/dist/peerjs.min.js"></script>
+    
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    
     <script type="module" src="chat.js"></script>
     <script type="module" src="vcWebRTC.js"></script>
     <script type="module" src="reconocimiento.js"></script>

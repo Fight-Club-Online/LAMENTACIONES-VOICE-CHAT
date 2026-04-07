@@ -1,9 +1,12 @@
 import express from "express";
+import dotenv from "dotenv";
+dotenv.config();
 import { createServer } from "node:http";
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { Server } from 'socket.io';
 import mongoose from 'mongoose';
+
 
 const app = express();
 const server = createServer(app);
@@ -15,8 +18,11 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const lobby = "sala-principal"; 
 
 // --- 1. CONFIGURACIÓN DE MONGODB ATLAS ---
-const mongoURI = "mongodb+srv://pacoandres03_db_user:admin@blueteam.biz5ysx.mongodb.net/VOICE-CHAT?retryWrites=true&w=majority";
-
+const mongoURI = process.env.MONGO_URI;
+if (!mongoURI) {
+    console.error("❌ MONGO_URI no está definida. Revisa tu archivo .env");
+    process.exit(1);
+}
 mongoose.connect(mongoURI)
     .then(() => console.log("✅ Conectado a MongoDB Atlas: VOICE-CHAT"))
     .catch(err => console.error("❌ Error en conexión Mongo:", err));

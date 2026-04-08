@@ -13,11 +13,16 @@ const io = new Server(server, {
     connectionStateRecovery: {} 
 });
 
+// --- CONFIGURACIÓN DE RUTAS Y MIDDLEWARE ---
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const lobby = "sala-principal"; 
 
-// --- VARIABLE DE CONTROL DE ESTADO (INGENIERÍA DE PROCESOS) ---
-let partidaIniciada = true;
+// 1. Middleware para que el servidor entienda JSON (Necesario para la integración con Java)
+app.use(express.json());
+
+// --- VARIABLE DE CONTROL DE ESTADO ---
+// Se recomienda iniciar en 'false' para que el chat esté bloqueado por defecto
+let partidaIniciada = false; 
 
 // --- 1. CONFIGURACIÓN DE MONGODB ATLAS ---
 const mongoURI = process.env.MONGO_URI;
@@ -53,30 +58,51 @@ function procesarMensaje(texto) {
     return { textoFiltrado, huboInfraccion };
 }
 
-// --- 3. SERVIDOR DE ARCHIVOS ESTÁTICOS ---
+// --- 3. SERVIDOR DE ARCHIVOS ESTÁTICOS Y API ---
 app.use(express.static(__dirname));
+
 app.get("/", (req, res) => {
     res.sendFile(join(__dirname, 'index.html'));
+});
+
+// --- NUEVO: ENDPOINTS DE CONTROL PARA FIGHT-SERVICE (JAVA) ---
+app.post("/api/iniciar-partida", (req, res) => {
+    partidaIniciada = true;
+    // Emitimos a todos los clientes que el chat ahora está activo
+    io.to(lobby).emit('estado_chat', { activo: true });
+    
+    console.log("[REST API] Señal recibida de Fight-Service: Chat HABILITADO");
+    res.status(200).json({ status: "success", message: "Partida iniciada en el servidor de voz" });
+});
+
+app.post("/api/finalizar-partida", (req, res) => {
+    partidaIniciada = false;
+    io.to(lobby).emit('estado_chat', { activo: false });
+    
+    console.log("[REST API] Señal recibida: Chat DESHABILITADO");
+    res.status(200).json({ status: "success", message: "Partida finalizada" });
 });
 
 // --- 4. LÓGICA DE SOCKET.IO ---
 io.on('connection', (socket) => {
     console.log(`Usuario conectado: ${socket.id}`);
+    
+    // --- APRETÓN DE MANOS INICIAL ---
+    // Apenas el cliente se conecta, le enviamos el estado actual (importante para que el botón no sea gris si ya empezó)
     socket.emit('estado_chat', { activo: partidaIniciada });
+
     socket.join(lobby);
     actualizarYEnviarLista();
 
-    // --- GESTIÓN DE ESTADO DE PARTIDA ---
+    // Eventos manuales (pueden usarse desde consola para testear)
     socket.on('iniciar_partida', () => {
         partidaIniciada = true;
         io.to(lobby).emit('estado_chat', { activo: true });
-        console.log("[GAME] Partida iniciada: Comunicación HABILITADA");
     });
 
     socket.on('finalizar_partida', () => {
         partidaIniciada = false;
         io.to(lobby).emit('estado_chat', { activo: false });
-        console.log("[GAME] Partida finalizada: Comunicación DESHABILITADA");
     });
 
     // --- EVENTO: REPORTAR USUARIO ---
@@ -97,7 +123,6 @@ io.on('connection', (socket) => {
 
     // --- EVENTO: CHAT Y MODERACIÓN (CON BLOQUEO DE ESTADO) ---
     socket.on('chat message', (msg) => {
-        // Bloqueo de seguridad si la partida no ha iniciado
         if (!partidaIniciada) {
             socket.emit('notificacion_sistema', "El chat está deshabilitado hasta que inicie la partida.");
             return; 
@@ -106,7 +131,6 @@ io.on('connection', (socket) => {
         if (msg && msg.texto) {
             const resultado = procesarMensaje(msg.texto);
             msg.texto = resultado.textoFiltrado;
-
             io.to(lobby).emit('chat message', msg);
 
             if (resultado.huboInfraccion) {

@@ -5,6 +5,7 @@ var peerList = [];
 let localStream = null;
 let estaSilenciadoGlobal = false; 
 let baneadoLocal = false; // Estado de baneo por conducta
+let chatHabilitadoPorPartida = false; // CONTROL DE ESTADO DE PARTIDA
 
 const llamada = document.getElementById("llamada");
 const btnHablar = document.getElementById('btn-hablar');
@@ -14,6 +15,29 @@ let listaUsuarios = [];
 
 const TECLA_PTT = " "; 
 let teclaPresionada = false;
+
+// --- GESTIÓN DE ESTADO DE PARTIDA ---
+
+socket.on('estado_chat', (estado) => {
+    chatHabilitadoPorPartida = estado.activo;
+    
+    if (btnHablar) {
+        if (chatHabilitadoPorPartida) {
+            btnHablar.disabled = false;
+            btnHablar.innerText = "Pulsar para Hablar";
+            btnHablar.style.opacity = "1";
+            btnHablar.style.cursor = "pointer";
+            btnHablar.style.backgroundColor = "";
+        } else {
+            btnHablar.disabled = true;
+            btnHablar.innerText = "Esperando partida...";
+            btnHablar.style.opacity = "0.5";
+            btnHablar.style.cursor = "not-allowed";
+            desactivarMicrofono(); // Apagado de seguridad
+        }
+    }
+    console.log(`[SISTEMA] Chat de voz ${chatHabilitadoPorPartida ? 'ACTIVADO' : 'DESACTIVADO'}`);
+});
 
 // --- INICIALIZACIÓN ---
 
@@ -58,6 +82,7 @@ function obtenerMedia() {
 // --- LÓGICA DE CONTROL DEL MICRÓFONO (PTT) ---
 
 function activarMicrofono() {
+    // BLOQUEO 1: Por baneo de conducta
     if (baneadoLocal) {
         if (btnHablar) {
             btnHablar.innerText = "¡BLOQUEADO!";
@@ -65,6 +90,9 @@ function activarMicrofono() {
         }
         return;
     }
+
+    // BLOQUEO 2: Por estado de la partida
+    if (!chatHabilitadoPorPartida) return;
 
     if (localStream && !estaSilenciadoGlobal) {
         localStream.getAudioTracks()[0].enabled = true;
@@ -76,12 +104,21 @@ function activarMicrofono() {
 function desactivarMicrofono() {
     if (localStream) {
         localStream.getAudioTracks()[0].enabled = false;
-        btnHablar.style.backgroundColor = baneadoLocal ? "#b0bec5" : ""; 
-        btnHablar.innerText = baneadoLocal ? "¡BLOQUEADO!" : "Pulsar para Hablar";
+        // Restaurar texto según estado
+        if (baneadoLocal) {
+            btnHablar.innerText = "¡BLOQUEADO!";
+            btnHablar.style.backgroundColor = "#b0bec5";
+        } else if (!chatHabilitadoPorPartida) {
+            btnHablar.innerText = "Esperando partida...";
+            btnHablar.style.backgroundColor = "";
+        } else {
+            btnHablar.innerText = "Pulsar para Hablar";
+            btnHablar.style.backgroundColor = ""; 
+        }
     }
 }
 
-// --- EVENTOS DE TECLADO ---
+// --- EVENTOS DE CONTROL (TECLADO, MOUSE, TOUCH) ---
 
 document.addEventListener('keydown', (e) => {
     if (e.key === TECLA_PTT && !teclaPresionada) {
@@ -98,8 +135,6 @@ document.addEventListener('keyup', (e) => {
     }
 });
 
-// --- EVENTOS DE MOUSE Y TOUCH ---
-
 if (btnHablar) {
     btnHablar.addEventListener('mousedown', activarMicrofono);
     btnHablar.addEventListener('mouseup', desactivarMicrofono);
@@ -107,7 +142,7 @@ if (btnHablar) {
     btnHablar.addEventListener('touchend', (e) => { e.preventDefault(); desactivarMicrofono(); });
 }
 
-// --- SISTEMA DE MODERACIÓN RECIBIDA ---
+// --- SISTEMA DE MODERACIÓN Y REPORTES ---
 
 socket.on('comando_silenciar', (idUsuarioMalportado) => {
     const elAudio = document.getElementById(`audio-${idUsuarioMalportado}`);
@@ -119,16 +154,17 @@ socket.on('comando_silenciar', (idUsuarioMalportado) => {
 });
 
 socket.on('notificacion_sistema', (msg) => {
-    // Si el mensaje indica un baneo, bloqueamos el PTT local
-    baneadoLocal = true;
-    estaSilenciadoGlobal = true;
-    desactivarMicrofono(); 
-    
-    if (btnMute) btnMute.disabled = true; 
-    console.error("Acceso a micrófono restringido por el sistema.");
+    // Si el servidor detecta baneo, bloqueamos localmente
+    if (msg.includes("desactivado") || msg.includes("conducta")) {
+        baneadoLocal = true;
+        estaSilenciadoGlobal = true;
+        desactivarMicrofono(); 
+        if (btnMute) btnMute.disabled = true; 
+    }
+    console.warn("Mensaje del sistema:", msg);
 });
 
-// --- LÓGICA DE LLAMADAS Y PEERJS ---
+// --- LÓGICA DE LLAMADAS (PEERJS) ---
 
 function listenToCall() {
     peer.on('call', (call) => {
@@ -141,6 +177,11 @@ function listenToCall() {
 
 llamada.addEventListener('click', (e) => {
     e.preventDefault();
+    // Solo permitir llamadas si la partida inició
+    if (!chatHabilitadoPorPartida) {
+        alert("Espera a que inicie la partida para llamar.");
+        return;
+    }
     listaUsuarios.forEach(userId => {
         if (socket.id !== userId) makeCall(userId);
     });
@@ -161,7 +202,7 @@ function gestionarNuevoStream(stream, peerID) {
     }
 }
 
-// --- BOTÓN MUTE MANUAL ---
+// --- BOTÓN MUTE MANUAL (LOCAL) ---
 
 if (btnMute) {
     btnMute.addEventListener('click', () => {
@@ -181,7 +222,7 @@ if (btnMute) {
     });
 }
 
-// --- GESTIÓN DE AUDIO EN DOM ---
+// --- GESTIÓN DE DOM (AUDIOS Y UI) ---
 
 function addLocalAudio(stream) {
     if (document.getElementById('local-audio')) return;
@@ -204,8 +245,6 @@ function addRemoteAudio(stream, peerID) {
     audio.srcObject = stream;
 }
 
-// --- INTERFAZ DE USUARIOS Y REPORTES ---
-
 function actualizarInterfazUsuarios() {
     if (!userUiList) return;
     userUiList.innerHTML = ''; 
@@ -223,7 +262,7 @@ function actualizarInterfazUsuarios() {
 
         const containerButtons = document.createElement('div');
 
-        // Botón Silenciar (Local)
+        // Botón Silenciar (Local/Mute Personal)
         const btnMuteInd = document.createElement('button');
         btnMuteInd.className = 'btn-small-mute';
         const elAudio = document.getElementById(`audio-${peerID}`);
@@ -239,7 +278,7 @@ function actualizarInterfazUsuarios() {
             }
         };
 
-        // Botón Reportar (MongoDB Atlas)
+        // Botón Reportar (Hacia MongoDB Atlas)
         const btnReportar = document.createElement('button');
         btnReportar.innerText = "Reportar";
         btnReportar.style.backgroundColor = "#d32f2f";

@@ -1,53 +1,56 @@
-import { socket } from './chat.js'
+import { socket } from './chat.js';
 
 let reconocimiento;
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-const btnHablar = document.getElementById('btn-hablar'); 
-let texto = '';
-let teclaPresionada = false; 
+const btnHablar         = document.getElementById('btn-hablar');
+let texto            = '';
+let teclaPresionada  = false;
 
-// --- VARIABLE DE CONTROL DE ESTADO (INGENIERÍA) ---
+// ─── DATOS DEL USUARIO LOCAL ──────────────────────────────────────────────────
+function getLocalUser() {
+    try {
+        const raw = localStorage.getItem('user_data');
+        return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+}
+
+// ─── CONTROL DE ESTADO DE PARTIDA ─────────────────────────────────────────────
 let chatHabilitadoPorPartida = false;
 
-// Escuchamos si la partida inició o terminó para habilitar el reconocimiento
 socket.on('estado_chat', (estado) => {
     chatHabilitadoPorPartida = estado.activo;
-    if (!chatHabilitadoPorPartida) {
-        console.log("[RECONOCIMIENTO] Deshabilitado: Esperando inicio de partida.");
-        if (reconocimiento) reconocimiento.stop(); 
-    } else {
-        console.log("[RECONOCIMIENTO] Habilitado: Partida en curso.");
+    if (!chatHabilitadoPorPartida && reconocimiento) {
+        console.log("[RECONOCIMIENTO] Deshabilitado: esperando partida.");
+        try { reconocimiento.stop(); } catch (_) {}
+    } else if (chatHabilitadoPorPartida) {
+        console.log("[RECONOCIMIENTO] Habilitado: partida en curso.");
     }
 });
 
+// ─── SPEECH RECOGNITION ───────────────────────────────────────────────────────
 if (SpeechRecognition) {
     console.log("Sistema de reconocimiento listo");
     reconocimiento = new SpeechRecognition();
-    reconocimiento.lang = 'es-ES';
-    reconocimiento.continuous = true;
-    reconocimiento.interimResults = true;
+    reconocimiento.lang            = 'es-ES';
+    reconocimiento.continuous      = true;
+    reconocimiento.interimResults  = true;
 
     reconocimiento.onresult = (event) => {
-        // Bloqueo preventivo si la partida no ha iniciado
         if (!chatHabilitadoPorPartida) return;
 
-        let textoTemporal = ''; 
+        let textoTemporal = '';
         for (let i = event.resultIndex; i < event.results.length; i++) {
             textoTemporal += event.results[i][0].transcript;
         }
-        
-        texto = textoTemporal; 
+        texto = textoTemporal;
         console.log("Procesando voz:", texto);
 
-        // Envío automático si el buffer es muy largo (150 caracteres)
+        // Auto-envío si el buffer supera 150 caracteres
         if (texto.length >= 150) {
-            socket.emit('chat message', {
-                id: socket.id,
-                texto: texto   
-            });
+            emitirMensajeDeVoz(texto);
             texto = '';
         }
-    }
+    };
 
     reconocimiento.onerror = (event) => {
         if (event.error !== 'aborted' && event.error !== 'no-speech') {
@@ -55,55 +58,47 @@ if (SpeechRecognition) {
         }
     };
 
-    reconocimiento.onend = () => {
-        console.log("Reconocimiento finalizado");
-    };
+    reconocimiento.onend = () => console.log("Reconocimiento finalizado");
 
-    const iniciarCaptura = () => {
-        // No iniciar si la partida no ha comenzado
-        if (!chatHabilitadoPorPartida) return;
-
-        texto = ''; 
-        try {
-            reconocimiento.start();
-        } catch (e) {
-            // Evita errores si ya está iniciado
-        }
-    };
-
-    const finalizarYEnviar = () => {
-        // Solo enviar si hay texto y la partida permite el chat
-        if (chatHabilitadoPorPartida && texto.trim().length > 0) {
-            socket.emit('chat message', {
-                id: socket.id,
-                texto: texto 
-            });
-        }
-        try {
-            reconocimiento.stop();
-        } catch (e) {}
-        texto = '';
-    };
-
-    // --- EVENTOS DE INTERFAZ (MOUSE / TOUCH) ---
-    if (btnHablar) {
-        btnHablar.addEventListener('mousedown', iniciarCaptura);
-        btnHablar.addEventListener('mouseup', finalizarYEnviar);
-        
-        btnHablar.addEventListener('touchstart', (e) => { 
-            e.preventDefault(); 
-            iniciarCaptura(); 
-        });
-        btnHablar.addEventListener('touchend', (e) => { 
-            e.preventDefault(); 
-            finalizarYEnviar(); 
+    // ── EMITIR CON userId y username ─────────────────────────────────────────
+    function emitirMensajeDeVoz(contenido) {
+        if (!contenido?.trim()) return;
+        const localUser = getLocalUser();
+        socket.emit('chat message', {
+            id:       socket.id,
+            userId:   localUser?.userId   || socket.id,
+            username: localUser?.username || null,
+            texto:    contenido
         });
     }
 
-    // --- EVENTOS DE TECLADO (ESPACIO / PTT) ---
+    // ── INICIO / FIN DE CAPTURA ───────────────────────────────────────────────
+    const iniciarCaptura = () => {
+        if (!chatHabilitadoPorPartida) return;
+        texto = '';
+        try { reconocimiento.start(); } catch (_) {}
+    };
+
+    const finalizarYEnviar = () => {
+        if (chatHabilitadoPorPartida && texto.trim().length > 0) {
+            emitirMensajeDeVoz(texto);
+        }
+        try { reconocimiento.stop(); } catch (_) {}
+        texto = '';
+    };
+
+    // ── BOTÓN PTT ─────────────────────────────────────────────────────────────
+    if (btnHablar) {
+        btnHablar.addEventListener('mousedown', iniciarCaptura);
+        btnHablar.addEventListener('mouseup',   finalizarYEnviar);
+        btnHablar.addEventListener('touchstart', (e) => { e.preventDefault(); iniciarCaptura(); });
+        btnHablar.addEventListener('touchend',   (e) => { e.preventDefault(); finalizarYEnviar(); });
+    }
+
+    // ── TECLADO ESPACIO (PTT) ─────────────────────────────────────────────────
     document.addEventListener('keydown', (e) => {
-        // Solo activamos si es la tecla espacio, no estamos en un input y la partida inició
-        if (e.key === " " && !teclaPresionada && e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
+        if (e.key === " " && !teclaPresionada &&
+            e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA') {
             if (!chatHabilitadoPorPartida) return;
             teclaPresionada = true;
             iniciarCaptura();
@@ -118,5 +113,5 @@ if (SpeechRecognition) {
     });
 
 } else {
-    console.log("Navegador no soporta Web Speech API");
+    console.log("Este navegador no soporta Web Speech API");
 }

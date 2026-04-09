@@ -1,15 +1,20 @@
-// chat.js
 export const socket = io();
 
-const form = document.getElementById('form');
-const input = document.getElementById('input');
+const form     = document.getElementById('form');
+const input    = document.getElementById('input');
 const messages = document.getElementById('messages');
 
 const palabrasProhibidas = ["tonto", "feo", "spam", "maldito", "idiota"];
 
-/**
- * Filtra el texto comparándolo con la lista de palabras prohibidas.
- */
+// ─── DATOS DEL USUARIO LOCAL ──────────────────────────────────────────────────
+function getLocalUser() {
+    try {
+        const raw = localStorage.getItem('user_data');
+        return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+}
+
+// ─── FILTRO LOCAL (feedback inmediato) ────────────────────────────────────────
 function filtrarMensaje(texto) {
     let resultado = texto;
     palabrasProhibidas.forEach(palabra => {
@@ -19,73 +24,120 @@ function filtrarMensaje(texto) {
     return resultado;
 }
 
-// --- ENVÍO DE MENSAJES ---
-form.addEventListener('submit', (e) => {
-    e.preventDefault();
-    
-    if (input.value.trim()) {
-        const textoOriginal = input.value;
-        
-        socket.emit('chat message', {
-            id: socket.id,
-            texto: textoOriginal
-        });
-        
-        input.value = '';
-    }
-});
+// ─── RENDERIZAR UN MENSAJE ────────────────────────────────────────────────────
+function renderMensaje(msg) {
+    if (!msg) return;
 
-socket.on('chat message', (msg) => {
-    if (!msg || !msg.id) return;
+    const localUser  = getLocalUser();
+    const esMio      = msg.id === socket.id || msg.userId === localUser?.userId;
+
+    // Nombre a mostrar: preferir username, luego userId corto, luego socketId corto
+    const remitente = esMio
+        ? "Tú"
+        : (msg.username || (msg.userId ? msg.userId.substring(0, 8) : null) || `User-${(msg.id || '?').substring(0, 5)}`);
 
     const item = document.createElement('li');
-    const esMio = msg.id === socket.id;
-    const remitente = esMio ? "Tú" : `Usuario (${msg.id.substring(0, 5)})`;
-    
-    item.style.padding = "10px 15px";
-    item.style.marginBottom = "8px";
-    item.style.borderRadius = "12px";
-    item.style.listStyle = "none";
-    item.style.maxWidth = "75%";
-    item.style.wordWrap = "break-word";
-    item.style.fontFamily = "sans-serif";
+    Object.assign(item.style, {
+        padding:         '10px 15px',
+        marginBottom:    '8px',
+        borderRadius:    '12px',
+        listStyle:       'none',
+        maxWidth:        '75%',
+        wordWrap:        'break-word',
+        fontFamily:      'sans-serif'
+    });
 
     if (esMio) {
-        item.style.backgroundColor = "#e3f2fd"; 
-        item.style.marginLeft = "auto";       
-        item.style.border = "1px solid #bbdefb";
+        item.style.backgroundColor = '#e3f2fd';
+        item.style.marginLeft      = 'auto';
+        item.style.border          = '1px solid #bbdefb';
     } else {
-        item.style.backgroundColor = "#ffffff"; 
-        item.style.marginRight = "auto";      
-        item.style.border = "1px solid #eeeeee";
-        item.style.boxShadow = "0 2px 4px rgba(0,0,0,0.05)";
+        item.style.backgroundColor = '#ffffff';
+        item.style.marginRight     = 'auto';
+        item.style.border          = '1px solid #eeeeee';
+        item.style.boxShadow       = '0 2px 4px rgba(0,0,0,0.05)';
     }
 
-    item.innerHTML = `<strong style="color: #1976d2; display: block; font-size: 0.8rem; margin-bottom: 4px;">${remitente}</strong> ${msg.texto}`;
-    
+    // Timestamp si viene del historial
+    const tsHtml = msg.timestamp
+        ? `<span style="font-size:0.7rem;color:#999;margin-left:6px">${new Date(msg.timestamp).toLocaleTimeString()}</span>`
+        : '';
+
+    item.innerHTML = `
+        <strong style="color:#1976d2;display:block;font-size:0.8rem;margin-bottom:4px;">
+            ${remitente}${tsHtml}
+        </strong>
+        ${msg.texto || msg.text || ''}`;
+
     messages.appendChild(item);
     scrollAlFinal();
+}
+
+// ─── CARGAR HISTORIAL AL CONECTAR ─────────────────────────────────────────────
+socket.on('estado_chat', async ({ activo, fightId }) => {
+    if (!activo || !fightId) return;
+
+    try {
+        const res  = await fetch(`/api/mensajes/${fightId}`);
+        const data = await res.json();
+        if (!Array.isArray(data) || data.length === 0) return;
+
+        // Separador visual
+        const sep = document.createElement('li');
+        sep.style.cssText = 'list-style:none;text-align:center;margin:12px 0;color:#aaa;font-size:0.75rem;';
+        sep.innerText = '── Historial de la partida ──';
+        messages.appendChild(sep);
+
+        data.forEach(m => renderMensaje({
+            id:        null,           // no es el socket actual
+            userId:    m.userId,
+            username:  m.username,
+            texto:     m.texto,
+            timestamp: m.timestamp
+        }));
+
+        const sep2 = document.createElement('li');
+        sep2.style.cssText = 'list-style:none;text-align:center;margin:12px 0;color:#aaa;font-size:0.75rem;';
+        sep2.innerText = '── Ahora en vivo ──';
+        messages.appendChild(sep2);
+
+    } catch (e) {
+        console.warn('[HISTORIAL] No se pudo cargar:', e.message);
+    }
 });
 
+// ─── ENVÍO DE MENSAJES ────────────────────────────────────────────────────────
+form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!input.value.trim()) return;
+
+    const localUser = getLocalUser();
+    socket.emit('chat message', {
+        id:       socket.id,
+        userId:   localUser?.userId   || socket.id,
+        username: localUser?.username || null,
+        texto:    input.value
+    });
+
+    input.value = '';
+});
+
+// ─── RECIBIR MENSAJES ─────────────────────────────────────────────────────────
+socket.on('chat message', renderMensaje);
+
+// ─── NOTIFICACIONES DE SISTEMA ────────────────────────────────────────────────
 socket.on('notificacion_sistema', (data) => {
     const item = document.createElement('li');
-    item.style.textAlign = "center";
-    item.style.margin = "15px 0";
-    item.style.listStyle = "none";
-    
+    item.style.cssText = 'text-align:center;margin:15px 0;list-style:none;';
     item.innerHTML = `
-        <span style="background-color: #ffebee; color: #c62828; padding: 5px 15px; border-radius: 20px; font-size: 0.85rem; border: 1px solid #ffcdd2; font-style: italic;">
+        <span style="background-color:#ffebee;color:#c62828;padding:5px 15px;border-radius:20px;font-size:0.85rem;border:1px solid #ffcdd2;font-style:italic;">
             ⚠️ <strong>Sistema:</strong> ${data}
-        </span>
-    `;
-    
+        </span>`;
     messages.appendChild(item);
     scrollAlFinal();
 });
 
+// ─── SCROLL ───────────────────────────────────────────────────────────────────
 function scrollAlFinal() {
-    window.scrollTo({
-        top: document.body.scrollHeight,
-        behavior: 'smooth'
-    });
+    window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
 }

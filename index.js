@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { Server } from 'socket.io';
 import mongoose from 'mongoose';
+import jwt from "jsonwebtoken";
 
 const app = express();
 const server = createServer(app);
@@ -15,6 +16,13 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const lobby = "sala-principal";
 
 app.use(express.json());
+app.use((req, res, next) => {
+    res.setHeader("Access-Control-Allow-Origin", process.env.FRONTEND_ORIGIN || "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    if (req.method === "OPTIONS") return res.sendStatus(204);
+    next();
+});
 
 // ─── ESTADO EN MEMORIA ────────────────────────────────────────────────────────
 let partidaIniciada = false;
@@ -40,6 +48,8 @@ const MAX_WARNINGS = 3;
 // ─── MONGODB ──────────────────────────────────────────────────────────────────
 const mongoURI = process.env.MONGO_URI;
 if (!mongoURI) { console.error("❌ MONGO_URI no definida"); process.exit(1); }
+
+const jwtSecret = process.env.JWT_SECRET;
 
 mongoose.connect(mongoURI)
     .then(() => console.log("✅ Conectado a MongoDB Atlas: VOICE-CHAT"))
@@ -91,6 +101,29 @@ function getUserFromSocket(socketId) {
     return socketToUser.get(socketId) || null;
 }
 
+function isAuthorizedUser(userId) {
+    return Boolean(userId) && authorizedPlayers.has(userId);
+}
+
+function isAuthorizedSocket(socketId) {
+    const user = getUserFromSocket(socketId);
+    return isAuthorizedUser(user?.userId);
+}
+
+function getAuthorizedSocketByUserId(userId) {
+    if (!isAuthorizedUser(userId)) return null;
+    const entry = authorizedPlayers.get(userId);
+    return entry?.socketId || null;
+}
+
+function emitToAuthorized(event, payload) {
+    for (const [, entry] of authorizedPlayers.entries()) {
+        if (entry.socketId) {
+            io.to(entry.socketId).emit(event, payload);
+        }
+    }
+}
+
 // ─── ESTÁTICOS ───────────────────────────────────────────────────────────────
 app.use(express.static(__dirname));
 app.get("/", (req, res) => res.sendFile(join(__dirname, 'index.html')));
@@ -108,7 +141,9 @@ app.post("/api/iniciar-partida", (req, res) => {
     authorizedPlayers.clear();
     warningCount.clear();
 
-    players.forEach(p => {
+    players
+        .filter(p => p?.playerType === "PLAYER")
+        .forEach(p => {
         authorizedPlayers.set(p.userId, {
             username: p.username || p.userId,
             playerType: p.playerType,
@@ -144,6 +179,41 @@ app.get("/api/mensajes/:fid", async (req, res) => {
     }
 });
 
+app.get("/api/status", (req, res) => {
+    res.json({
+        active: partidaIniciada,
+        fightId,
+        authorizedPlayers: authorizedPlayers.size
+    });
+});
+
+// ─── SOCKET.IO AUTH ──────────────────────────────────────────────────────────
+io.use((socket, next) => {
+    if (!jwtSecret) {
+        console.warn("⚠️ JWT_SECRET no definido, se permite conexión sin validar token (solo dev).");
+        return next();
+    }
+
+    const authToken = socket.handshake.auth?.token
+        || socket.handshake.headers.authorization?.replace("Bearer ", "");
+
+    if (!authToken) {
+        return next(new Error("Token requerido para canal de voz"));
+    }
+
+    try {
+        const payload = jwt.verify(authToken, jwtSecret);
+        const userId = payload.sub || payload.userId;
+        if (!userId) {
+            return next(new Error("Token sin subject válido"));
+        }
+        socketToUser.set(socket.id, { userId, username: String(userId) });
+        return next();
+    } catch (e) {
+        return next(new Error("Token inválido para canal de voz"));
+    }
+});
+
 // ─── SOCKET.IO ────────────────────────────────────────────────────────────────
 io.on('connection', (socket) => {
     console.log(`Socket conectado: ${socket.id}`);
@@ -155,25 +225,36 @@ io.on('connection', (socket) => {
 
     // ── IDENTIFICAR USUARIO ────────────────────────────────────────────────
     socket.on('identificar', ({ userId, username }) => {
-        if (!userId) return;
+        const existing = socketToUser.get(socket.id);
+        const effectiveUserId = existing?.userId || userId;
+        if (!effectiveUserId) return;
 
-        const displayName = username || userId;
-        socketToUser.set(socket.id, { userId, username: displayName });
+        const displayName = username || existing?.username || effectiveUserId;
+        socketToUser.set(socket.id, { userId: effectiveUserId, username: displayName });
 
         // Vincular socketId en authorizedPlayers si existe
-        if (authorizedPlayers.has(userId)) {
-            const entry = authorizedPlayers.get(userId);
+        if (authorizedPlayers.has(effectiveUserId)) {
+            const entry = authorizedPlayers.get(effectiveUserId);
             entry.socketId = socket.id;
             entry.username = displayName;
-            authorizedPlayers.set(userId, entry);
+            authorizedPlayers.set(effectiveUserId, entry);
         }
 
-        console.log(`[ID] ${socket.id} → userId=${userId} username=${displayName}`);
-        socket.emit('identificado', { ok: true, userId, username: displayName });
+        console.log(`[ID] ${socket.id} → userId=${effectiveUserId} username=${displayName}`);
+        socket.emit('identificado', { ok: true, userId: effectiveUserId, username: displayName });
+        actualizarYEnviarLista();
+
+        if (!authorizedPlayers.has(effectiveUserId)) {
+            socket.emit('voice_access_denied', { reason: 'No eres combatiente de esta pelea.' });
+        }
     });
 
     // ── TOGGLE MUTE LOCAL (sincronizar con sala) ───────────────────────────
     socket.on('toggle_mute_local', ({ mutedSelf }) => {
+        if (!partidaIniciada || !isAuthorizedSocket(socket.id)) {
+            socket.emit('voice_access_denied', { reason: 'Solo combatientes pueden usar voz.' });
+            return;
+        }
         const user = getUserFromSocket(socket.id);
         const name = user?.username || socket.id.substring(0, 5);
         socket.to(lobby).emit('peer_mute_changed', {
@@ -188,6 +269,11 @@ io.on('connection', (socket) => {
     socket.on('chat message', async (msg) => {
         if (!partidaIniciada) {
             socket.emit('notificacion_sistema', "El chat está deshabilitado hasta que inicie la partida.");
+            return;
+        }
+
+        if (!isAuthorizedSocket(socket.id)) {
+            socket.emit('voice_access_denied', { reason: 'Solo combatientes pueden usar el chat de pelea.' });
             return;
         }
 
@@ -209,7 +295,7 @@ io.on('connection', (socket) => {
             console.error("[DB] Error guardando mensaje:", e.message);
         }
 
-        io.to(lobby).emit('chat message', msg);
+        emitToAuthorized('chat message', msg);
 
         // Gestionar infracción
         if (huboInfraccion) {
@@ -227,7 +313,7 @@ io.on('connection', (socket) => {
             const mensajeAdvertencia = `⚠️ ${username} recibió advertencia ${next}/${MAX_WARNINGS} por lenguaje inapropiado.`;
 
             // Mostrar advertencia a toda la sala
-            io.to(lobby).emit('advertencia_sistema', {
+            emitToAuthorized('advertencia_sistema', {
                 userId,
                 username,
                 count: next,
@@ -240,7 +326,7 @@ io.on('connection', (socket) => {
 
             // Al alcanzar el límite → silenciar micrófono
             if (next >= MAX_WARNINGS) {
-                io.to(lobby).emit('comando_silenciar', socket.id);
+                emitToAuthorized('comando_silenciar', socket.id);
                 socket.emit('notificacion_sistema', "Tu micrófono ha sido desactivado permanentemente por reiteradas infracciones.");
                 console.log(`[MUTE] ${username} (${userId}) alcanzó ${MAX_WARNINGS} advertencias → silenciado`);
             }
@@ -249,6 +335,10 @@ io.on('connection', (socket) => {
 
     // ── REPORTAR USUARIO ──────────────────────────────────────────────────
     socket.on('enviar_reporte', async ({ targetId, motivo }) => {
+        if (!partidaIniciada || !isAuthorizedSocket(socket.id)) {
+            socket.emit('voice_access_denied', { reason: 'Solo combatientes pueden reportar en pelea.' });
+            return;
+        }
         try {
             const user = getUserFromSocket(socket.id);
             await new Reporte({
@@ -262,6 +352,46 @@ io.on('connection', (socket) => {
         } catch (e) {
             console.error("[DB] Error al guardar reporte:", e.message);
         }
+    });
+
+    // ── WEBRTC SIGNALING (solo combatientes) ──────────────────────────────
+    socket.on('rtc-offer', ({ toUserId, offer }) => {
+        if (!partidaIniciada || !isAuthorizedSocket(socket.id)) {
+            socket.emit('voice_access_denied', { reason: 'No autorizado para señalización WebRTC.' });
+            return;
+        }
+
+        const from = getUserFromSocket(socket.id);
+        const targetSocketId = getAuthorizedSocketByUserId(toUserId);
+        if (!from?.userId || !targetSocketId || !offer) return;
+
+        io.to(targetSocketId).emit('rtc-offer', { fromUserId: from.userId, offer });
+    });
+
+    socket.on('rtc-answer', ({ toUserId, answer }) => {
+        if (!partidaIniciada || !isAuthorizedSocket(socket.id)) {
+            socket.emit('voice_access_denied', { reason: 'No autorizado para señalización WebRTC.' });
+            return;
+        }
+
+        const from = getUserFromSocket(socket.id);
+        const targetSocketId = getAuthorizedSocketByUserId(toUserId);
+        if (!from?.userId || !targetSocketId || !answer) return;
+
+        io.to(targetSocketId).emit('rtc-answer', { fromUserId: from.userId, answer });
+    });
+
+    socket.on('rtc-ice-candidate', ({ toUserId, candidate }) => {
+        if (!partidaIniciada || !isAuthorizedSocket(socket.id)) {
+            socket.emit('voice_access_denied', { reason: 'No autorizado para señalización WebRTC.' });
+            return;
+        }
+
+        const from = getUserFromSocket(socket.id);
+        const targetSocketId = getAuthorizedSocketByUserId(toUserId);
+        if (!from?.userId || !targetSocketId || !candidate) return;
+
+        io.to(targetSocketId).emit('rtc-ice-candidate', { fromUserId: from.userId, candidate });
     });
 
     // ── CONTROLES MANUALES (testing) ──────────────────────────────────────
@@ -295,11 +425,13 @@ io.on('connection', (socket) => {
 async function actualizarYEnviarLista() {
     try {
         const sockets = await io.in(lobby).fetchSockets();
-        const lista = sockets.map(s => {
+        const lista = sockets
+            .map(s => {
             const user = socketToUser.get(s.id);
             return { socketId: s.id, userId: user?.userId || null, username: user?.username || null };
-        });
-        io.to(lobby).emit('listaSockets', lista);
+            })
+            .filter(item => isAuthorizedUser(item.userId));
+        emitToAuthorized('listaSockets', lista);
     } catch (e) {
         console.error("Error actualizando lista:", e);
     }

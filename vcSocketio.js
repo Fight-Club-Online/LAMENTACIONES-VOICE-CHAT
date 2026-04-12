@@ -1,83 +1,85 @@
-const vcSocket = io("http://localhost:3000", {
-    transports: ['websocket'],
-    upgrade: false
+// Asegúrate que el puerto coincida con tu servidor de voz (ej. 3030)
+const vcSocket = io("http://localhost:3030", {
+    transports: ['websocket']
 });
 
 const btnHablar = document.getElementById('btn-hablar'); 
-
 let mediaRecorder;
 let localStream;
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+let siguienteFragmento = 0;
 
-navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+// Inicializar micrófono
+navigator.mediaDevices.getUserMedia({ audio: true })
     .then((stream) => {
         localStream = stream;
-        localStream.getAudioTracks()[0].enabled = false;
-        console.log("Micrófono vinculado y en espera (PTT)");
+        // Mantener pistas desactivadas hasta que se presione el botón
+        localStream.getAudioTracks().forEach(track => track.enabled = false);
     })
-    .catch(err => console.error("Error al acceder al micrófono:", err));
+    .catch(err => console.error("Error micrófono:", err));
 
 if (btnHablar) {
-    btnHablar.addEventListener('mousedown', () => {
+    const startRecording = async () => {
         if (!localStream) return;
+        if (audioCtx.state === 'suspended') await audioCtx.resume();
 
         localStream.getAudioTracks()[0].enabled = true;
-
-        mediaRecorder = new MediaRecorder(localStream);
         
-        mediaRecorder.addEventListener('dataavailable', async (event) => {
+        // Usamos un formato compatible (opus es estándar para web)
+        mediaRecorder = new MediaRecorder(localStream, { mimeType: 'audio/webm;codecs=opus' });
+        
+        mediaRecorder.ondataavailable = async (event) => {
             if (event.data.size > 0 && vcSocket.connected) {
                 const audioData = await event.data.arrayBuffer();
                 vcSocket.emit('audioStream', audioData);
             }
-        });
+        };
 
-        mediaRecorder.start(100); 
-        btnHablar.style.backgroundColor = "#4CAF50"; 
+        mediaRecorder.start(100); // Enviar trozos cada 100ms
+        btnHablar.classList.add('active'); // Usa clases en lugar de estilos inline
         btnHablar.innerText = "Hablando...";
-    });
+    };
 
-    btnHablar.addEventListener('mouseup', () => {
+    const stopRecording = () => {
         if (mediaRecorder && mediaRecorder.state !== 'inactive') {
             mediaRecorder.stop();
             if (localStream) {
                 localStream.getAudioTracks()[0].enabled = false;
             }
-            btnHablar.style.backgroundColor = ""; 
+            btnHablar.classList.remove('active');
             btnHablar.innerText = "Mantener para Hablar";
         }
-    });
+    };
 
-    btnHablar.addEventListener('touchstart', (e) => { 
-        e.preventDefault(); 
-        btnHablar.dispatchEvent(new Event('mousedown')); 
+    // Eventos Mouse
+    btnHablar.addEventListener('mousedown', startRecording);
+    window.addEventListener('mouseup', stopRecording); // Mejor en window por si el mouse sale del botón
+
+    // Eventos Touch (Mobile)
+    btnHablar.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        startRecording();
     });
-    btnHablar.addEventListener('touchend', () => { 
-        btnHablar.dispatchEvent(new Event('mouseup')); 
-    });
+    btnHablar.addEventListener('touchend', stopRecording);
 }
 
-const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-let siguienteFragmento = 0;
-
+// Recibir audio de otros
 vcSocket.on('audioStream', async (audioData) => {
     try {
-        if (audioCtx.state === 'suspended') {
-            await audioCtx.resume();
+        const decodedData = await audioCtx.decodeAudioData(audioData);
+        const source = audioCtx.createBufferSource();
+        source.buffer = decodedData;
+        source.connect(audioCtx.destination);
+
+        const now = audioCtx.currentTime;
+        // Si el tiempo programado ya pasó, resetear al tiempo actual
+        if (siguienteFragmento < now) {
+            siguienteFragmento = now;
         }
 
-        const audioDataDecodificado = await audioCtx.decodeAudioData(audioData);
-        const fuente = audioCtx.createBufferSource();
-        fuente.buffer = audioDataDecodificado;
-        fuente.connect(audioCtx.destination);
-
-        const tiempoActual = audioCtx.currentTime;
-        if (siguienteFragmento < tiempoActual) {
-            siguienteFragmento = tiempoActual;
-        }
-
-        fuente.start(siguienteFragmento);
-        siguienteFragmento += audioDataDecodificado.duration;
+        source.start(siguienteFragmento);
+        siguienteFragmento += decodedData.duration;
     } catch (e) {
-        console.error("Error al decodificar audio entrante", e);
+        // Ignorar errores de decodificación de fragmentos incompletos al soltar el botón
     }
 });

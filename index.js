@@ -477,3 +477,9 @@ server.listen(PORT, () => {
     console.log(`📡 Puerto detectado: ${process.env.PORT || 'Usando default 3030'}`);
     console.log(`🎮 Estado inicial: ${partidaIniciada ? 'ACTIVO' : 'ESPERANDO PARTIDA'}\n`);
 });
+// Añade esto en tu archivo index.js del servidor
+socket.on('peer_ready', ({ peerId }) => {
+    console.log(`[PEER READY] Usuario ${socket.id} listo con PeerID: ${peerId}`);
+    // Re-enviamos la lista a todos para que intenten llamar al nuevo integrante
+    actualizarYEnviarLista();
+});

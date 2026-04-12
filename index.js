@@ -13,7 +13,7 @@ async function connectRabbitMQ() {
         const connection = await amqp.connect(process.env.RABBITMQ_URL || 'amqp://localhost');
         const channel = await connection.createChannel();
 
-        const queues = ['fights.user.registered.queue', 'fights.guest.registered.queue'];
+        const queues = ['fight.user.registered.queue', 'fight.guest.registered.queue'];
 
         for (const queue of queues) {
             // Aseguramos que la cola existe

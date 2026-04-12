@@ -52,7 +52,6 @@ async function connectRabbitMQ() {
     }
 }
 
-connectRabbitMQ();
 
 const app = express();
 const server = createServer(app);
@@ -128,7 +127,13 @@ const Advertencia = mongoose.model('Warning', new mongoose.Schema({
 }), 'WARNINGS');
 
 // ─── FILTRO DE PALABRAS ───────────────────────────────────────────────────────
-const PALABRAS_BANEADAS = ["tonto", "feo", "estupido", "maldito", "idiota", "bobada"];
+const PALABRAS_BANEADAS = [
+    "tonto","feo","spam","maldito","idiota","estupido","imbecil","bobada",
+    "mierda","puta","puto","cabron","hijueputa","hp","culero","pendejo",
+    "maricon","hdp","gonorrea","malparido","mongolo","retrasado","inutil",
+    "bastardo","desgraciado","subnormal","gilipollas","cagada","perra","zorra",
+    "fuck","shit","bitch","asshole","crap","idiot","moron","loser","damn",
+];
 
 function procesarMensaje(texto) {
     if (!texto) return { textoFiltrado: "", huboInfraccion: false };
@@ -513,10 +518,9 @@ async function actualizarYEnviarLista() {
                     socketId: s.id,
                     userId: user?.userId || null,
                     username: user?.username || null,
-                    peerId: s.peerId || null // <--- CRÍTICO
                 };
             })
-            .filter(item => isAuthorizedUser(item.userId) && item.peerId);
+            .filter(item => isAuthorizedUser(item.userId)); 
         emitToAuthorized('listaSockets', lista);
     } catch (e) {
         console.error("Error actualizando lista:", e);

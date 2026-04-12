@@ -55,7 +55,19 @@ async function connectRabbitMQ() {
 
 const app = express();
 const server = createServer(app);
-const io = new Server(server, { connectionStateRecovery: {} });
+const io = new Server(server, {
+    connectionStateRecovery: {},
+    cors: {
+        origin: [
+            process.env.FRONTEND_ORIGIN || 'http://localhost:5173',
+            'https://lamentaciones-frontend.vercel.app',
+            'http://localhost:5173',
+        ],
+        methods: ['GET', 'POST'],
+        credentials: true,
+    },
+    transports: ['polling', 'websocket'],  
+});
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const lobby = "sala-principal";

@@ -189,29 +189,19 @@ app.get("/api/status", (req, res) => {
 
 // ─── SOCKET.IO AUTH ──────────────────────────────────────────────────────────
 io.use((socket, next) => {
-    if (!jwtSecret) {
-        console.warn("⚠️ JWT_SECRET no definido, se permite conexión sin validar token (solo dev).");
-        return next();
-    }
+    if (!jwtSecret) return next(); 
 
     const authToken = socket.handshake.auth?.token
         || socket.handshake.headers.authorization?.replace("Bearer ", "");
 
-    if (!authToken) {
-        return next(new Error("Token requerido para canal de voz"));
-    }
+    if (!authToken) return next(); 
 
     try {
         const payload = jwt.verify(authToken, jwtSecret);
         const userId = payload.sub || payload.userId;
-        if (!userId) {
-            return next(new Error("Token sin subject válido"));
-        }
-        socketToUser.set(socket.id, { userId, username: String(userId) });
-        return next();
-    } catch (e) {
-        return next(new Error("Token inválido para canal de voz"));
-    }
+        if (userId) socketToUser.set(socket.id, { userId, username: String(userId) });
+    } catch (_) { /* token inválido, igual se permite conectar */ }
+    return next();
 });
 
 // ─── SOCKET.IO ────────────────────────────────────────────────────────────────
@@ -403,6 +393,47 @@ io.on('connection', (socket) => {
     socket.on('finalizar_partida', () => {
         partidaIniciada = false;
         io.to(lobby).emit('estado_chat', { activo: false });
+    });
+
+    // ── ACTIVAR SALA POR FIGHTID ───────────────
+    socket.on('join_fight', ({ fightId: fid, userId, username }) => {
+        if (!fid || !userId) return;
+        // Registrar usuario
+        const effectiveUser = socketToUser.get(socket.id) || {};
+        socketToUser.set(socket.id, {
+            userId: effectiveUser.userId || userId,
+            username: effectiveUser.username || username || userId
+        });
+        
+        const effectiveUserId = effectiveUser.userId || userId;
+        const displayName     = effectiveUser.username || username || userId;
+        
+        if (!fightId || fightId !== String(fid)) {
+            fightId          = String(fid);
+            partidaIniciada  = true;
+            warningCount.clear();
+            console.log(`[SOCKET] Partida activada por join_fight. fightId=${fightId}`);
+        }
+
+        // Autorizar jugador
+        if (!authorizedPlayers.has(effectiveUserId)) {
+            authorizedPlayers.set(effectiveUserId, {
+                username:   displayName,
+                playerType: 'PLAYER',
+                socketId:   socket.id
+            });
+        } else {
+            const entry = authorizedPlayers.get(effectiveUserId);
+            entry.socketId = socket.id;
+            entry.username = displayName;
+            authorizedPlayers.set(effectiveUserId, entry);
+        }
+
+        // Emitir estado a TODOS los de la sala
+        io.to(lobby).emit('estado_chat', { activo: true, fightId });
+        actualizarYEnviarLista();
+        socket.emit('identificado', { ok: true, userId: effectiveUserId, username: displayName });
+        console.log(`[JOIN_FIGHT] ${displayName} (${effectiveUserId}) → fightId=${fightId}`);
     });
 
     // ── DESCONEXIÓN ───────────────────────────────────────────────────────

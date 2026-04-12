@@ -278,28 +278,28 @@ io.on('connection', (socket) => {
 
     // ── IDENTIFICAR USUARIO ────────────────────────────────────────────────
     socket.on('identificar', ({ userId, username }) => {
-        const existing = socketToUser.get(socket.id);
+        const existing = socketToUser.get(socket.id); 
         const effectiveUserId = existing?.userId || userId;
         if (!effectiveUserId) return;
-
         const displayName = username || existing?.username || effectiveUserId;
-        socketToUser.set(socket.id, { userId: effectiveUserId, username: displayName });
+        socketToUser.set(socket.id, {
+        userId: effectiveUserId,
+        username: displayName
+       });
+       
+       if (authorizedPlayers.has(effectiveUserId)) {
+        const entry = authorizedPlayers.get(effectiveUserId);
+        entry.socketId = socket.id;
+        entry.username = displayName;
+        authorizedPlayers.set(effectiveUserId, entry);
+      }
+      console.log(`[ID] ${socket.id} → userId=${effectiveUserId} username=${displayName}`);
+      socket.emit('identificado', { ok: true, userId: effectiveUserId, username: displayName });
+      actualizarYEnviarLista();
 
-        // Vincular socketId en authorizedPlayers si existe
-        if (authorizedPlayers.has(effectiveUserId)) {
-            const entry = authorizedPlayers.get(effectiveUserId);
-            entry.socketId = socket.id;
-            entry.username = displayName;
-            authorizedPlayers.set(effectiveUserId, entry);
-        }
-
-        console.log(`[ID] ${socket.id} → userId=${effectiveUserId} username=${displayName}`);
-        socket.emit('identificado', { ok: true, userId: effectiveUserId, username: displayName });
-        actualizarYEnviarLista();
-
-        if (!authorizedPlayers.has(effectiveUserId)) {
-            socket.emit('voice_access_denied', { reason: 'No eres combatiente de esta pelea.' });
-        }
+       if (!authorizedPlayers.has(effectiveUserId)) {
+        socket.emit('voice_access_denied', { reason: 'No eres combatiente de esta pelea.' });
+       }
     });
     socket.on('peer_ready', ({ peerId }) => {
         socket.peerId = peerId;
@@ -465,15 +465,15 @@ io.on('connection', (socket) => {
     // ── ACTIVAR SALA POR FIGHTID ───────────────
     socket.on('join_fight', ({ fightId: fid, userId, username }) => {
         if (!fid || !userId) return;
-        // Registrar usuario
+        
         const effectiveUser = socketToUser.get(socket.id) || {};
+        const effectiveUserId = userId || effectiveUser.userId;
+        const displayName = username || effectiveUser.username || userId;
+        
         socketToUser.set(socket.id, {
-            userId: effectiveUser.userId || userId,
-            username: effectiveUser.username || username || userId
+            userId: effectiveUserId,   
+            username: displayName
         });
-
-        const effectiveUserId = effectiveUser.userId || userId;
-        const displayName = effectiveUser.username || username || userId;
 
         if (!fightId || fightId !== String(fid)) {
             fightId = String(fid);
@@ -497,9 +497,12 @@ io.on('connection', (socket) => {
         }
 
         // Emitir estado a TODOS los de la sala
-        io.to(lobby).emit('estado_chat', { activo: true, fightId });
-        actualizarYEnviarLista();
+        // 1. Primero identificado (activa chatActive en el cliente)
         socket.emit('identificado', { ok: true, userId: effectiveUserId, username: displayName });
+        // 2. Luego estado_chat a todos
+        io.to(lobby).emit('estado_chat', { activo: true, fightId });
+        // 3. Al final la lista (ya con chatActive=true en el cliente)
+        actualizarYEnviarLista();
         console.log(`[JOIN_FIGHT] ${displayName} (${effectiveUserId}) → fightId=${fightId}`);
     });
 
@@ -526,13 +529,11 @@ async function actualizarYEnviarLista() {
         const lista = sockets
             .map(s => {
                 const user = socketToUser.get(s.id);
-                return {
-                    socketId: s.id,
-                    userId: user?.userId || null,
-                    username: user?.username || null,
-                };
+                return { socketId: s.id, userId: user?.userId || null, username: user?.username || null };
             })
-            .filter(item => isAuthorizedUser(item.userId)); 
+            .filter(item => isAuthorizedUser(item.userId));
+        
+        console.log('[LISTA] Enviando a autorizados:', [...authorizedPlayers.keys()], '| lista:', lista);
         emitToAuthorized('listaSockets', lista);
     } catch (e) {
         console.error("Error actualizando lista:", e);

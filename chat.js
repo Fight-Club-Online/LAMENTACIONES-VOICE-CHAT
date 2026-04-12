@@ -4,6 +4,23 @@ const form     = document.getElementById('form');
 const input    = document.getElementById('input');
 const messages = document.getElementById('messages');
 
+socket.on('connect', () => {
+    const user = getLocalUser();
+    
+    // Extracción más robusta: busca el segmento después de /fight/
+    const pathParts = location.pathname.split('/');
+    const fightIndex = pathParts.indexOf('fight');
+    const fightId = fightIndex !== -1 ? pathParts[fightIndex + 1] : null;
+
+    if (user && fightId) {
+        console.log(`[SOCKET] Reconectado. Uniéndose a pelea: ${fightId}`);
+        socket.emit('join_fight', {
+            fightId: fightId,
+            userId: user.userId,
+            username: user.username
+        });
+    }
+});
 const palabrasProhibidas = ["tonto", "feo", "spam", "maldito", "idiota"];
 
 // ─── DATOS DEL USUARIO LOCAL ──────────────────────────────────────────────────

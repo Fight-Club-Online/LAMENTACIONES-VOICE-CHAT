@@ -49,37 +49,59 @@ function getLocalUser() {
 
 // ─── INIT PEER ────────────────────────────────────────────────────────────────
 function initPeer(userid) {
-    if (peer) { try { peer.destroy(); } catch (_) {} }
+    if (peer) return; 
+
     peer = new Peer(userid);
+
     peer.on('open', id => {
         console.log('[PEER] Abierto con ID:', id);
         listenToCall();
+        
+        // REFUERZO: Si la partida ya estaba activa, llamamos ahora que el Peer está listo
+        if (chatHabilitadoPorPartida) {
+            console.log("[PEER] Partida activa detectada al abrir, llamando...");
+            setTimeout(() => llamarATodos(), 1000);
+        }
     });
-    peer.on('error', err => console.error('[PEER] Error:', err));
+
+    peer.on('error', err => {
+        console.error('[PEER] Error:', err);
+        if (err.type === 'id-taken') {
+            // Si el ID está ocupado por una sesión fantasma, reintentar con sufijo
+            initPeer(userid + "-alt");
+        }
+    });
 }
 
 // ─── AL CONECTAR ──────────────────────────────────────────────────────────────
 socket.on('connect', () => {
     const user = getLocalUser();
-    if (user?.userId) {
-        // Obtener fightId de la URL
-        const fightId = location.pathname.split('/fight/')[1]?.split('/')[0];
+    // Obtener fightId de la URL de forma segura
+    const fightId = location.pathname.includes('/fight/') 
+                    ? location.pathname.split('/fight/')[1].split('/')[0] 
+                    : null;
+
+    if (user?.userId && fightId) {
         socket.emit('join_fight', {
-            fightId:  fightId || null,
+            fightId:  fightId,
             userId:   user.userId,
             username: user.username || user.userId
         });
     }
-    initPeer(socket.id);
+    // Inicializamos el peer usando el socket.id
+    initPeer(user.userId);
 });
 
 // ─── ESTADO DE PARTIDA ────────────────────────────────────────────────────────
 socket.on('estado_chat', (estado) => {
     chatHabilitadoPorPartida = estado.activo;
     actualizarBotonHablar();
+
     if (chatHabilitadoPorPartida) {
-        // Auto-llamar a todos al activarse la partida
-        setTimeout(() => llamarATodos(), 500);
+        // Solo llamamos si el objeto Peer ya está listo
+        if (peer && peer.open) {
+            setTimeout(() => llamarATodos(), 500);
+        }
     } else {
         desactivarMicrofono();
     }
@@ -89,7 +111,7 @@ socket.on('estado_chat', (estado) => {
 socket.on('listaSockets', (lista) => {
     const prevCount = listaUsuarios.length;
     listaUsuarios = lista;
-    // Si llega alguien nuevo y la partida está activa, llamarle
+
     if (chatHabilitadoPorPartida && lista.length > prevCount) {
         lista.forEach(({ socketId }) => {
             if (socketId !== socket.id && !peerList.includes(socketId)) {
@@ -99,7 +121,6 @@ socket.on('listaSockets', (lista) => {
     }
     actualizarInterfazUsuarios();
 });
-
 // ─── LLAMAR A TODOS ───────────────────────────────────────────────────────────
 function llamarATodos() {
     listaUsuarios.forEach(({ socketId }) => {
@@ -113,11 +134,12 @@ function llamarATodos() {
 function obtenerMedia() {
     return new Promise((resolve, reject) => {
         if (localStream) { resolve(localStream); return; }
+        
         navigator.mediaDevices.getUserMedia({
             video: false,
             audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
         }).then(stream => {
-            stream.getAudioTracks()[0].enabled = false; // empieza muteado (PTT)
+            stream.getAudioTracks()[0].enabled = false; // PTT por defecto
             localStream = stream;
             addLocalAudio(stream);
             resolve(stream);
@@ -173,7 +195,6 @@ if (btnHablar) {
     btnHablar.addEventListener('touchstart', e => { e.preventDefault(); activarMicrofono(); });
     btnHablar.addEventListener('touchend', e => { e.preventDefault(); desactivarMicrofono(); });
 }
-
 if (llamada) {
     llamada.addEventListener('click', e => {
         e.preventDefault();
@@ -227,21 +248,24 @@ socket.on('notificacion_sistema', msg => console.warn('Sistema:', msg));
 // ─── PEERJS ───────────────────────────────────────────────────────────────────
 function listenToCall() {
     peer.on('call', call => {
+        console.log(`[PEER] Recibiendo llamada de: ${call.peer}`);
         obtenerMedia().then(stream => {
             call.answer(stream);
             call.on('stream', remote => gestionarStream(remote, call.peer));
-            call.on('error', err => console.error('[PEER] Call error:', err));
         });
     });
 }
 
+// ─── PEERJS: REALIZAR LLAMADA ─────────────────────────────────────────────────
 window.makeCall = function(receiverID) {
     obtenerMedia().then(stream => {
+        console.log(`[PEER] Llamando a: ${receiverID}`);
         const call = peer.call(receiverID, stream);
         if (!call) return;
+        
         call.on('stream', remote => gestionarStream(remote, call.peer));
         call.on('error', err => console.error('[PEER] makeCall error:', err));
-    }).catch(err => console.error('[MEDIA] Error:', err));
+    }).catch(err => console.error('[MEDIA] Error al obtener micro para llamada:', err));
 };
 
 function gestionarStream(stream, peerID) {

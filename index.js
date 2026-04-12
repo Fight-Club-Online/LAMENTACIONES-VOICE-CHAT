@@ -57,27 +57,27 @@ mongoose.connect(mongoURI)
 
 // ─── SCHEMAS ──────────────────────────────────────────────────────────────────
 const Reporte = mongoose.model('Report', new mongoose.Schema({
-    fightId:   String,
-    emisorId:  String,
-    targetId:  String,
-    motivo:    String,
-    fecha:     { type: Date, default: Date.now }
+    fightId: String,
+    emisorId: String,
+    targetId: String,
+    motivo: String,
+    fecha: { type: Date, default: Date.now }
 }), 'REPORT');
 
 const Mensaje = mongoose.model('Message', new mongoose.Schema({
-    fightId:   String,
-    userId:    String,
-    username:  String,
-    texto:     String,
+    fightId: String,
+    userId: String,
+    username: String,
+    texto: String,
     timestamp: { type: Date, default: Date.now }
 }), 'MESSAGES');
 
 const Advertencia = mongoose.model('Warning', new mongoose.Schema({
-    fightId:   String,
-    userId:    String,
-    username:  String,
-    texto:     String,
-    count:     Number,
+    fightId: String,
+    userId: String,
+    username: String,
+    texto: String,
+    count: Number,
     timestamp: { type: Date, default: Date.now }
 }), 'WARNINGS');
 
@@ -144,12 +144,12 @@ app.post("/api/iniciar-partida", (req, res) => {
     players
         .filter(p => p?.playerType === "PLAYER")
         .forEach(p => {
-        authorizedPlayers.set(p.userId, {
-            username: p.username || p.userId,
-            playerType: p.playerType,
-            socketId: null
+            authorizedPlayers.set(p.userId, {
+                username: p.username || p.userId,
+                playerType: p.playerType,
+                socketId: null
+            });
         });
-    });
 
     io.to(lobby).emit('estado_chat', { activo: true, fightId });
     console.log(`[REST] Partida iniciada. fightId=${fightId} | jugadores=${players.length}`);
@@ -189,12 +189,12 @@ app.get("/api/status", (req, res) => {
 
 // ─── SOCKET.IO AUTH ──────────────────────────────────────────────────────────
 io.use((socket, next) => {
-    if (!jwtSecret) return next(); 
+    if (!jwtSecret) return next();
 
     const authToken = socket.handshake.auth?.token
         || socket.handshake.headers.authorization?.replace("Bearer ", "");
 
-    if (!authToken) return next(); 
+    if (!authToken) return next();
 
     try {
         const payload = jwt.verify(authToken, jwtSecret);
@@ -238,6 +238,12 @@ io.on('connection', (socket) => {
             socket.emit('voice_access_denied', { reason: 'No eres combatiente de esta pelea.' });
         }
     });
+    socket.on('peer_ready', ({ peerId }) => {
+        console.log(`[PEER] Usuario ${socket.id} reporta PeerID: ${peerId}`);
+        // Forzamos el envío de la lista actualizada a todos los combatientes
+        // Esto dispara el makeCall() en los clientes que ya estaban conectados
+        actualizarYEnviarLista();
+    });
 
     // ── TOGGLE MUTE LOCAL (sincronizar con sala) ───────────────────────────
     socket.on('toggle_mute_local', ({ mutedSelf }) => {
@@ -249,9 +255,9 @@ io.on('connection', (socket) => {
         const name = user?.username || socket.id.substring(0, 5);
         socket.to(lobby).emit('peer_mute_changed', {
             socketId: socket.id,
-            userId:   user?.userId,
+            userId: user?.userId,
             username: name,
-            muted:    mutedSelf
+            muted: mutedSelf
         });
     });
 
@@ -270,13 +276,13 @@ io.on('connection', (socket) => {
         if (!msg?.texto) return;
 
         const user = getUserFromSocket(socket.id);
-        const userId   = user?.userId   || socket.id;
+        const userId = user?.userId || socket.id;
         const username = user?.username || `Usuario-${socket.id.substring(0, 5)}`;
 
         const { textoFiltrado, huboInfraccion } = procesarMensaje(msg.texto);
         msg.texto = textoFiltrado;
         msg.username = username;
-        msg.userId   = userId;
+        msg.userId = userId;
 
         // Persistir mensaje en MongoDB
         try {
@@ -307,7 +313,7 @@ io.on('connection', (socket) => {
                 userId,
                 username,
                 count: next,
-                max:   MAX_WARNINGS,
+                max: MAX_WARNINGS,
                 mensaje: mensajeAdvertencia
             });
 
@@ -404,13 +410,13 @@ io.on('connection', (socket) => {
             userId: effectiveUser.userId || userId,
             username: effectiveUser.username || username || userId
         });
-        
+
         const effectiveUserId = effectiveUser.userId || userId;
-        const displayName     = effectiveUser.username || username || userId;
-        
+        const displayName = effectiveUser.username || username || userId;
+
         if (!fightId || fightId !== String(fid)) {
-            fightId          = String(fid);
-            partidaIniciada  = true;
+            fightId = String(fid);
+            partidaIniciada = true;
             warningCount.clear();
             console.log(`[SOCKET] Partida activada por join_fight. fightId=${fightId}`);
         }
@@ -418,9 +424,9 @@ io.on('connection', (socket) => {
         // Autorizar jugador
         if (!authorizedPlayers.has(effectiveUserId)) {
             authorizedPlayers.set(effectiveUserId, {
-                username:   displayName,
+                username: displayName,
                 playerType: 'PLAYER',
-                socketId:   socket.id
+                socketId: socket.id
             });
         } else {
             const entry = authorizedPlayers.get(effectiveUserId);
@@ -458,8 +464,8 @@ async function actualizarYEnviarLista() {
         const sockets = await io.in(lobby).fetchSockets();
         const lista = sockets
             .map(s => {
-            const user = socketToUser.get(s.id);
-            return { socketId: s.id, userId: user?.userId || null, username: user?.username || null };
+                const user = socketToUser.get(s.id);
+                return { socketId: s.id, userId: user?.userId || null, username: user?.username || null };
             })
             .filter(item => isAuthorizedUser(item.userId));
         emitToAuthorized('listaSockets', lista);
@@ -476,10 +482,4 @@ server.listen(PORT, () => {
     console.log(`\n🚀 Servidor ejecutándose en: http://localhost:${PORT}`);
     console.log(`📡 Puerto detectado: ${process.env.PORT || 'Usando default 3030'}`);
     console.log(`🎮 Estado inicial: ${partidaIniciada ? 'ACTIVO' : 'ESPERANDO PARTIDA'}\n`);
-});
-// Añade esto en tu archivo index.js del servidor
-socket.on('peer_ready', ({ peerId }) => {
-    console.log(`[PEER READY] Usuario ${socket.id} listo con PeerID: ${peerId}`);
-    // Re-enviamos la lista a todos para que intenten llamar al nuevo integrante
-    actualizarYEnviarLista();
 });

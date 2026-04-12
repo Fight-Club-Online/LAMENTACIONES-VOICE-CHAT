@@ -7,6 +7,52 @@ import { dirname, join } from 'node:path';
 import { Server } from 'socket.io';
 import mongoose from 'mongoose';
 import jwt from "jsonwebtoken";
+import amqp from 'amqplib';
+async function connectRabbitMQ() {
+    try {
+        const connection = await amqp.connect(process.env.RABBITMQ_URL || 'amqp://localhost');
+        const channel = await connection.createChannel();
+
+        const queues = ['fights.user.registered.queue', 'fights.guest.registered.queue'];
+
+        for (const queue of queues) {
+            // Aseguramos que la cola existe
+            await channel.assertQueue(queue, { durable: true });
+
+            console.log(`[*] Escuchando en: ${queue}`);
+
+            channel.consume(queue, (msg) => {
+                if (msg !== null) {
+                    const content = JSON.parse(msg.content.toString());
+                    console.log(`[EVENTO] Recibido de ${queue}:`, content);
+
+                    // Aquí disparamos la lógica para activar el chat
+                    // Asumimos que el mensaje trae un roomId o gameId
+                    const roomId = content.gameId || content.roomId;
+
+                    // Asegúrate de que esta parte se vea así en tu función:
+                    if (roomId) {
+                        console.log(`[RABBIT] Activando pelea: ${roomId}`);
+                        partidaIniciada = true;
+                        fightId = String(roomId); // Actualizamos el estado global
+
+                        // Notificamos a todos en la sala principal
+                        io.to(lobby).emit('estado_chat', { activo: true, fightId: roomId });
+
+                        // Forzamos la actualización de la lista de voces
+                        actualizarYEnviarLista();
+                    }
+
+                    channel.ack(msg); // Confirmamos la lectura para que salga de la cola
+                }
+            }, { noAck: false }); // Usamos confirmación manual para seguridad
+        }
+    } catch (error) {
+        console.error("Error en RabbitMQ:", error);
+    }
+}
+
+connectRabbitMQ();
 
 const app = express();
 const server = createServer(app);
@@ -239,9 +285,7 @@ io.on('connection', (socket) => {
         }
     });
     socket.on('peer_ready', ({ peerId }) => {
-        console.log(`[PEER] Usuario ${socket.id} reporta PeerID: ${peerId}`);
-        // Forzamos el envío de la lista actualizada a todos los combatientes
-        // Esto dispara el makeCall() en los clientes que ya estaban conectados
+        socket.peerId = peerId;
         actualizarYEnviarLista();
     });
 
@@ -465,9 +509,14 @@ async function actualizarYEnviarLista() {
         const lista = sockets
             .map(s => {
                 const user = socketToUser.get(s.id);
-                return { socketId: s.id, userId: user?.userId || null, username: user?.username || null };
+                return {
+                    socketId: s.id,
+                    userId: user?.userId || null,
+                    username: user?.username || null,
+                    peerId: s.peerId || null // <--- CRÍTICO
+                };
             })
-            .filter(item => isAuthorizedUser(item.userId));
+            .filter(item => isAuthorizedUser(item.userId) && item.peerId);
         emitToAuthorized('listaSockets', lista);
     } catch (e) {
         console.error("Error actualizando lista:", e);
@@ -478,8 +527,11 @@ async function actualizarYEnviarLista() {
 // Priorizamos el PORT del .env sobre cualquier cosa inyectada por el IDE
 const PORT = process.env.PORT ? Number(process.env.PORT) : 3030;
 
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', async () => {
     console.log(`\n🚀 Servidor ejecutándose en: http://localhost:${PORT}`);
     console.log(`📡 Puerto detectado: ${process.env.PORT || 'Usando default 3030'}`);
     console.log(`🎮 Estado inicial: ${partidaIniciada ? 'ACTIVO' : 'ESPERANDO PARTIDA'}\n`);
+    
+    // Iniciamos RabbitMQ DESPUÉS de que el servidor y socket.io estén listos
+    await connectRabbitMQ();
 });

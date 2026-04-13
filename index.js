@@ -97,6 +97,9 @@ const authorizedPlayers = new Map();
  */
 const socketToUser = new Map();
 
+// Todos los usuarios (jugadores + espectadores) para señalización WebRTC
+const connectedUsers = new Map();
+
 
 /** advertencias por userId */
 const warningCount = new Map();
@@ -173,6 +176,13 @@ function isAuthorizedSocket(socketId) {
     return isAuthorizedUser(user?.userId);
 }
 
+// Permite señalización WebRTC a jugadores Y espectadores
+function isConnectedUser(socketId) {
+    const user = getUserFromSocket(socketId);
+    if (!user?.userId) return false;
+    return isAuthorizedUser(user.userId) || connectedUsers.has(user.userId);
+}
+
 function getAuthorizedSocketByUserId(userId) {
     if (!isAuthorizedUser(userId)) return null;
     const entry = authorizedPlayers.get(userId);
@@ -189,6 +199,15 @@ function findSocketByUserId(targetUserId) {
 function emitToAuthorized(event, payload) {
     for (const [, entry] of authorizedPlayers.entries()) {
         if (entry.socketId) {
+            io.to(entry.socketId).emit(event, payload);
+        }
+    }
+}
+
+function emitToAll(event, payload) {
+    emitToAuthorized(event, payload);
+    for (const [userId, entry] of connectedUsers.entries()) {
+        if (entry.playerType === 'SPECTATOR' && entry.socketId && !authorizedPlayers.has(userId)) {
             io.to(entry.socketId).emit(event, payload);
         }
     }
@@ -420,41 +439,32 @@ io.on('connection', (socket) => {
 
     // ── WEBRTC SIGNALING (solo combatientes) ──────────────────────────────
     socket.on('rtc-offer', ({ toUserId, offer }) => {
-        console.log('[RTC-OFFER] 📨 Evento recibido en servidor');
         const from = getUserFromSocket(socket.id);
-        console.log('[RTC-OFFER] from:', from);
-        console.log('[RTC-OFFER] partidaIniciada:', partidaIniciada);
-        console.log('[RTC-OFFER] isAuthorizedSocket:', isAuthorizedSocket(socket.id));
-        console.log('[RTC-OFFER] socketToUser tiene socket:', socketToUser.has(socket.id));
-
         const targetSocketId = findSocketByUserId(toUserId);
-        console.log(`[RTC-OFFER] para=${toUserId} | targetSocket=${targetSocketId}`);
 
-        if (!partidaIniciada || !isAuthorizedSocket(socket.id)) {
-            console.log('[RTC-OFFER] ❌ RECHAZADO - no autorizado');
+        if (!partidaIniciada || !isConnectedUser(socket.id)) {
             socket.emit('voice_access_denied', { reason: 'No autorizado.' });
             return;
         }
-        if (!from?.userId || !targetSocketId || !offer) {
-            console.log('[RTC-OFFER] ❌ DESCARTADO - datos faltantes');
-            return;
-        }
-        console.log('[RTC-OFFER] ✅ REENVIANDO a socket:', targetSocketId);
+        if (!from?.userId || !targetSocketId || !offer) return;
+
+        console.log(`[RTC-OFFER] ${from.userId} [${from.playerType}] → ${toUserId}`);
         io.to(targetSocketId).emit('rtc-offer', { fromUserId: from.userId, offer });
     });
-    
+
     socket.on('rtc-answer', ({ toUserId, answer }) => {
-        if (!partidaIniciada || !isAuthorizedSocket(socket.id)) return;
         const from = getUserFromSocket(socket.id);
-        const targetSocketId = findSocketByUserId(toUserId); 
+        const targetSocketId = findSocketByUserId(toUserId);
+        if (!partidaIniciada || !isConnectedUser(socket.id)) return;
         if (!from?.userId || !targetSocketId || !answer) return;
-         io.to(targetSocketId).emit('rtc-answer', { fromUserId: from.userId, answer });
+        console.log(`[RTC-ANSWER] ${from.userId} → ${toUserId}`);
+        io.to(targetSocketId).emit('rtc-answer', { fromUserId: from.userId, answer });
     });
-        
+    
     socket.on('rtc-ice-candidate', ({ toUserId, candidate }) => {
-        if (!partidaIniciada || !isAuthorizedSocket(socket.id)) return;
         const from = getUserFromSocket(socket.id);
-        const targetSocketId = findSocketByUserId(toUserId); 
+        const targetSocketId = findSocketByUserId(toUserId);
+        if (!partidaIniciada || !isConnectedUser(socket.id)) return;
         if (!from?.userId || !targetSocketId || !candidate) return;
         io.to(targetSocketId).emit('rtc-ice-candidate', { fromUserId: from.userId, candidate });
     });
@@ -471,26 +481,31 @@ io.on('connection', (socket) => {
     });
 
     // ── ACTIVAR SALA POR FIGHTID ───────────────
-    socket.on('join_fight', ({ fightId: fid, userId, username }) => {
+    socket.on('join_fight', ({ fightId: fid, userId, username, playerType = 'PLAYER' }) => {
         if (!fid || !userId) return;
-        
+
         const effectiveUser = socketToUser.get(socket.id) || {};
         const effectiveUserId = userId || effectiveUser.userId;
         const displayName = username || effectiveUser.username || userId;
-        
-        socketToUser.set(socket.id, {
-            userId: effectiveUserId,   
-            username: displayName
-        });
+        const isPlayer = playerType === 'PLAYER';
+
+        socketToUser.set(socket.id, { userId: effectiveUserId, username: displayName, playerType: isPlayer ? 'PLAYER' : 'SPECTATOR'});
+
+        // Si cambia el fightId, limpiar primero para que clientes limpien WebRTC
+        if (fightId && fightId !== String(fid)) {
+            console.log(`[JOIN_FIGHT] Nuevo fightId: ${fightId} → ${fid}, limpiando`);
+            io.to(lobby).emit('estado_chat', { activo: false });
+        }
 
         if (!fightId || fightId !== String(fid)) {
             fightId = String(fid);
             partidaIniciada = true;
             warningCount.clear();
-            console.log(`[SOCKET] Partida activada por join_fight. fightId=${fightId}`);
+            console.log(`[SOCKET] Partida activada. fightId=${fightId}`);
         }
 
-        // Autorizar jugador
+        // Solo jugadores van a authorizedPlayers (pueden hablar y escribir)
+        if (isPlayer) {
         if (!authorizedPlayers.has(effectiveUserId)) {
             authorizedPlayers.set(effectiveUserId, {
                 username: displayName,
@@ -503,31 +518,54 @@ io.on('connection', (socket) => {
             entry.username = displayName;
             authorizedPlayers.set(effectiveUserId, entry);
         }
-
-        // Emitir estado a TODOS los de la sala
-        // 1. Primero identificado (activa chatActive en el cliente)
-        socket.emit('identificado', { ok: true, userId: effectiveUserId, username: displayName });
-        // 2. Luego estado_chat a todos
-        io.to(lobby).emit('estado_chat', { activo: true, fightId });
-        // 3. Al final la lista (ya con chatActive=true en el cliente)
-        actualizarYEnviarLista();
-        console.log(`[JOIN_FIGHT] ${displayName} (${effectiveUserId}) → fightId=${fightId}`);
+    }
+    // Todos (jugadores + espectadores) van a connectedUsers para señalización WebRTC
+    connectedUsers.set(effectiveUserId, {
+        username: displayName,
+        playerType: isPlayer ? 'PLAYER' : 'SPECTATOR',
+        socketId: socket.id
+    });
+    
+    socket.emit('identificado', {
+        ok: true,
+        userId: effectiveUserId,
+        username: displayName,
+        playerType: isPlayer ? 'PLAYER' : 'SPECTATOR'
     });
 
+    io.to(lobby).emit('estado_chat', { activo: true, fightId });
+    // Delay para que el cliente procese estado_chat antes de listaSockets
+    setTimeout(() => actualizarYEnviarLista(), 150);
+    console.log(`[JOIN_FIGHT] ${displayName} (${effectiveUserId}) [${isPlayer ? 'PLAYER' : 'SPECTATOR'}] → fightId=${fightId}`);
+});
+
     // ── DESCONEXIÓN ───────────────────────────────────────────────────────
-    socket.on('disconnect', () => {
-        const user = socketToUser.get(socket.id);
-        if (user && authorizedPlayers.has(user.userId)) {
+socket.on('disconnect', () => {
+    const user = socketToUser.get(socket.id);
+    if (user) {
+        if (authorizedPlayers.has(user.userId)) {
             const entry = authorizedPlayers.get(user.userId);
             if (entry.socketId === socket.id) {
                 entry.socketId = null;
                 authorizedPlayers.set(user.userId, entry);
             }
         }
-        socketToUser.delete(socket.id);
-        console.log(`Socket desconectado: ${socket.id}`);
-        actualizarYEnviarLista();
-    });
+        if (connectedUsers.has(user.userId)) {
+            const entry = connectedUsers.get(user.userId);
+            if (entry.socketId === socket.id) {
+                if (user.playerType === 'SPECTATOR') {
+                    connectedUsers.delete(user.userId);
+                } else {
+                    entry.socketId = null;
+                    connectedUsers.set(user.userId, entry);
+                }
+            }
+        }
+    }
+    socketToUser.delete(socket.id);
+    console.log(`Socket desconectado: ${socket.id}`);
+    actualizarYEnviarLista();
+});
 });
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -537,12 +575,28 @@ async function actualizarYEnviarLista() {
         const lista = sockets
             .map(s => {
                 const user = socketToUser.get(s.id);
-                return { socketId: s.id, userId: user?.userId || null, username: user?.username || null };
+                return {
+                    socketId: s.id,
+                    userId: user?.userId || null,
+                    username: user?.username || null,
+                    playerType: user?.playerType || 'SPECTATOR'
+                };
             })
-            .filter(item => isAuthorizedUser(item.userId));
-        
-        console.log('[LISTA] Enviando a autorizados:', [...authorizedPlayers.keys()], '| lista:', lista);
+            .filter(item =>
+                item.userId && (isAuthorizedUser(item.userId) || connectedUsers.has(item.userId))
+            );
+
+        console.log('[LISTA] Enviando:', lista.map(l => `${l.userId}[${l.playerType}]`));
+
+        // Enviar a jugadores
         emitToAuthorized('listaSockets', lista);
+
+        // Enviar también a espectadores para que reciban el audio
+        for (const [userId, entry] of connectedUsers.entries()) {
+            if (entry.playerType === 'SPECTATOR' && entry.socketId && !authorizedPlayers.has(userId)) {
+                io.to(entry.socketId).emit('listaSockets', lista);
+            }
+        }
     } catch (e) {
         console.error("Error actualizando lista:", e);
     }
@@ -560,3 +614,4 @@ server.listen(PORT, '0.0.0.0', async () => {
     // Iniciamos RabbitMQ DESPUÉS de que el servidor y socket.io estén listos
     await connectRabbitMQ();
 });
+

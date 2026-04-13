@@ -440,16 +440,29 @@ io.on('connection', (socket) => {
     // ── WEBRTC SIGNALING (solo combatientes) ──────────────────────────────
     socket.on('rtc-offer', ({ toUserId, offer }) => {
         const from = getUserFromSocket(socket.id);
-        const targetSocketId = findSocketByUserId(toUserId);
 
         if (!partidaIniciada || !isConnectedUser(socket.id)) {
-            socket.emit('voice_access_denied', { reason: 'No autorizado.' });
-            return;
+           socket.emit('voice_access_denied', { reason: 'No autorizado.' });
+           return;
         }
-        if (!from?.userId || !targetSocketId || !offer) return;
+        if (!from?.userId || !offer) return;
+        
+        const forwardOffer = (attempts = 0) => {
+            const targetSocketId = findSocketByUserId(toUserId);
+            if (targetSocketId) {
+                console.log(`[RTC-OFFER] ${from.userId} → ${toUserId} (intento ${attempts + 1})`);
+                io.to(targetSocketId).emit('rtc-offer', { fromUserId: from.userId, offer });
+                return;
+            }
 
-        console.log(`[RTC-OFFER] ${from.userId} [${from.playerType}] → ${toUserId}`);
-        io.to(targetSocketId).emit('rtc-offer', { fromUserId: from.userId, offer });
+            if (attempts < 5) {
+                console.log(`[RTC-OFFER] Socket de ${toUserId} no encontrado, reintentando en 500ms...`);
+                setTimeout(() => forwardOffer(attempts + 1), 500);
+            } else {
+                console.warn(`[RTC-OFFER] No se encontró socket de ${toUserId} tras 5 intentos`);
+            }
+        };
+        forwardOffer();
     });
 
     socket.on('rtc-answer', ({ toUserId, answer }) => {

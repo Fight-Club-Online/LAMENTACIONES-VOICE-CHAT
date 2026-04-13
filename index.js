@@ -179,6 +179,13 @@ function getAuthorizedSocketByUserId(userId) {
     return entry?.socketId || null;
 }
 
+function findSocketByUserId(targetUserId) {
+    for (const [socketId, user] of socketToUser.entries()) {
+        if (user.userId === targetUserId) return socketId;
+    }
+    return null;
+}
+
 function emitToAuthorized(event, payload) {
     for (const [, entry] of authorizedPlayers.entries()) {
         if (entry.socketId) {
@@ -414,45 +421,33 @@ io.on('connection', (socket) => {
     // ── WEBRTC SIGNALING (solo combatientes) ──────────────────────────────
     socket.on('rtc-offer', ({ toUserId, offer }) => {
         const from = getUserFromSocket(socket.id);
-        const targetSocketId = getAuthorizedSocketByUserId(toUserId);
-        console.log(`[RTC-OFFER] de=${from?.userId} | para=${toUserId} | targetSocket=${targetSocketId} | autorizado=${isAuthorizedSocket(socket.id)} | activo=${partidaIniciada}`);
-    
+        const targetSocketId = findSocketByUserId(toUserId); // ← CAMBIADO
+        console.log(`[RTC-OFFER] de=${from?.userId} | para=${toUserId} | targetSocket=${targetSocketId}`);
+
         if (!partidaIniciada || !isAuthorizedSocket(socket.id)) {
-            console.log('[RTC-OFFER] ❌ RECHAZADO - no autorizado');
-            socket.emit('voice_access_denied', { reason: 'No autorizado para señalización WebRTC.' });
+            socket.emit('voice_access_denied', { reason: 'No autorizado.' });
             return;
         }
         if (!from?.userId || !targetSocketId || !offer) {
-            console.log('[RTC-OFFER] ❌ DESCARTADO - datos faltantes', { fromUserId: from?.userId, targetSocketId, hasOffer: !!offer });
+            console.log('[RTC-OFFER] ❌ target no encontrado');
             return;
         }
-        console.log('[RTC-OFFER] ✅ REENVIANDO a socket:', targetSocketId);
         io.to(targetSocketId).emit('rtc-offer', { fromUserId: from.userId, offer });
     });
-
+    
     socket.on('rtc-answer', ({ toUserId, answer }) => {
-        if (!partidaIniciada || !isAuthorizedSocket(socket.id)) {
-            socket.emit('voice_access_denied', { reason: 'No autorizado para señalización WebRTC.' });
-            return;
-        }
-
+        if (!partidaIniciada || !isAuthorizedSocket(socket.id)) return;
         const from = getUserFromSocket(socket.id);
-        const targetSocketId = getAuthorizedSocketByUserId(toUserId);
+        const targetSocketId = findSocketByUserId(toUserId); 
         if (!from?.userId || !targetSocketId || !answer) return;
-
-        io.to(targetSocketId).emit('rtc-answer', { fromUserId: from.userId, answer });
+         io.to(targetSocketId).emit('rtc-answer', { fromUserId: from.userId, answer });
     });
-
+        
     socket.on('rtc-ice-candidate', ({ toUserId, candidate }) => {
-        if (!partidaIniciada || !isAuthorizedSocket(socket.id)) {
-            socket.emit('voice_access_denied', { reason: 'No autorizado para señalización WebRTC.' });
-            return;
-        }
-
+        if (!partidaIniciada || !isAuthorizedSocket(socket.id)) return;
         const from = getUserFromSocket(socket.id);
-        const targetSocketId = getAuthorizedSocketByUserId(toUserId);
+        const targetSocketId = findSocketByUserId(toUserId); 
         if (!from?.userId || !targetSocketId || !candidate) return;
-
         io.to(targetSocketId).emit('rtc-ice-candidate', { fromUserId: from.userId, candidate });
     });
 

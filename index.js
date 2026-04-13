@@ -420,18 +420,26 @@ io.on('connection', (socket) => {
 
     // ── WEBRTC SIGNALING (solo combatientes) ──────────────────────────────
     socket.on('rtc-offer', ({ toUserId, offer }) => {
+        console.log('[RTC-OFFER] 📨 Evento recibido en servidor');
         const from = getUserFromSocket(socket.id);
-        const targetSocketId = findSocketByUserId(toUserId); // ← CAMBIADO
-        console.log(`[RTC-OFFER] de=${from?.userId} | para=${toUserId} | targetSocket=${targetSocketId}`);
+        console.log('[RTC-OFFER] from:', from);
+        console.log('[RTC-OFFER] partidaIniciada:', partidaIniciada);
+        console.log('[RTC-OFFER] isAuthorizedSocket:', isAuthorizedSocket(socket.id));
+        console.log('[RTC-OFFER] socketToUser tiene socket:', socketToUser.has(socket.id));
+
+        const targetSocketId = findSocketByUserId(toUserId);
+        console.log(`[RTC-OFFER] para=${toUserId} | targetSocket=${targetSocketId}`);
 
         if (!partidaIniciada || !isAuthorizedSocket(socket.id)) {
+            console.log('[RTC-OFFER] ❌ RECHAZADO - no autorizado');
             socket.emit('voice_access_denied', { reason: 'No autorizado.' });
             return;
         }
         if (!from?.userId || !targetSocketId || !offer) {
-            console.log('[RTC-OFFER] ❌ target no encontrado');
+            console.log('[RTC-OFFER] ❌ DESCARTADO - datos faltantes');
             return;
         }
+        console.log('[RTC-OFFER] ✅ REENVIANDO a socket:', targetSocketId);
         io.to(targetSocketId).emit('rtc-offer', { fromUserId: from.userId, offer });
     });
     

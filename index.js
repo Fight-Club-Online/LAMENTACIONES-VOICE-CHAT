@@ -1,5 +1,5 @@
 import dotenv from "dotenv";
-dotenv.config({ override: true });
+dotenv.config();
 import express from "express";
 import { createServer } from "node:http";
 import { fileURLToPath } from 'node:url';

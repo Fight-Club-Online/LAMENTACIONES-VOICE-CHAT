@@ -23,8 +23,11 @@ jobs:
         with:
           node-version: '22.x'
 
+      - name: npm install production only
+        run: npm install --omit=dev
+
       - name: Zip artifact for deployment
-        run: zip release.zip ./* -r --exclude="node_modules/*" --exclude=".git/*" --exclude=".env"
+        run: zip -r release.zip . --exclude="./.git/*" --exclude="./.env"
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4

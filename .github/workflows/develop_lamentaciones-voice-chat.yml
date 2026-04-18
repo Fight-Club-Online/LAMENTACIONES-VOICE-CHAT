@@ -65,4 +65,3 @@ jobs:
           app-name: 'lamentaciones-voice-chat'
           slot-name: 'Production'
           package: release.zip
-          

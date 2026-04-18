@@ -11,7 +11,9 @@ import amqp from 'amqplib';
 
 async function connectRabbitMQ() {
     try {
-        const connection = await amqp.connect(process.env.RABBITMQ_URL || 'amqp://localhost');
+        const rabbitUrl = process.env.RABBITMQ_URL ||
+            `amqp://${process.env.RABBITMQ_USERNAME || 'guest'}:${process.env.RABBITMQ_PASSWORD || 'guest'}@${process.env.RABBITMQ_HOST || 'localhost'}:${process.env.RABBITMQ_PORT || 5672}`;
+        const connection = await amqp.connect(rabbitUrl);
         const channel = await connection.createChannel();
 
         const queues = ['fight.user.registered.queue', 'fight.guest.registered.queue'];

@@ -104,6 +104,7 @@ const connectedUsers = new Map();
 /** advertencias por userId */
 const warningCount = new Map();
 const MAX_WARNINGS = 3;
+const mutedRelations = new Map();
 
 // ─── MONGODB ──────────────────────────────────────────────────────────────────
 const mongoURI = process.env.MONGO_URI;
@@ -160,6 +161,15 @@ function procesarMensaje(texto) {
         textoFiltrado = textoFiltrado.replace(regex, "****");
     });
     return { textoFiltrado, huboInfraccion };
+}
+function getSocketByUserId(userId) {
+    for (const [socketId, user] of socketToUser.entries()) {
+        if (user.userId === userId) {
+            const socket = io.sockets.sockets.get(socketId);
+            if (socket && socket.connected) return socket;
+        }
+    }
+    return null;
 }
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -461,7 +471,54 @@ io.on('connection', (socket) => {
         // Feedback al que ejecuta el comando
         socket.emit('notificacion_sistema', `🔇 Has silenciado a ${targetUser?.username || 'usuario'}`);
     });
+    socket.on('mute_user', ({ targetUserId }) => {
+        const fromUser = getUserFromSocket(socket.id);
+        if (!fromUser?.userId || !targetUserId) return;
 
+        // Inicializar si no existe
+        if (!mutedRelations.has(fromUser.userId)) {
+            mutedRelations.set(fromUser.userId, new Set());
+        }
+
+        const userMutedSet = mutedRelations.get(fromUser.userId);
+
+        if (userMutedSet.has(targetUserId)) {
+            // 🔊 DESMUTEAR
+            userMutedSet.delete(targetUserId);
+
+            socket.emit('mute_updated', {
+                targetUserId,
+                muted: false
+            });
+
+            const targetSocket = getSocketByUserId(targetUserId);
+            if (targetSocket) {
+                targetSocket.emit('mute_updated', {
+                    targetUserId: fromUser.userId,
+                    muted: false
+                });
+            }
+
+        } else {
+            // 🔇 MUTEAR BIDIRECCIONAL
+            userMutedSet.add(targetUserId);
+
+            socket.emit('mute_updated', {
+                targetUserId,
+                muted: true
+            });
+
+            const targetSocket = getSocketByUserId(targetUserId);
+            if (targetSocket) {
+                targetSocket.emit('mute_updated', {
+                    targetUserId: fromUser.userId,
+                    muted: true
+                });
+            }
+        }
+
+        console.log(`[MUTE] ${fromUser.userId} <-> ${targetUserId}`);
+    });
     // ── WEBRTC SIGNALING ──────────────────────────────────────────────────
     socket.on('rtc-offer', ({ toUserId, offer }) => {
         const from = getUserFromSocket(socket.id);
@@ -595,7 +652,9 @@ io.on('connection', (socket) => {
     // ── DESCONEXIÓN ───────────────────────────────────────────────────────
     socket.on('disconnect', () => {
         const user = socketToUser.get(socket.id);
+
         if (user) {
+            // authorizedPlayers
             if (authorizedPlayers.has(user.userId)) {
                 const entry = authorizedPlayers.get(user.userId);
                 if (entry.socketId === socket.id) {
@@ -603,6 +662,8 @@ io.on('connection', (socket) => {
                     authorizedPlayers.set(user.userId, entry);
                 }
             }
+
+            // connectedUsers
             if (connectedUsers.has(user.userId)) {
                 const entry = connectedUsers.get(user.userId);
                 if (entry.socketId === socket.id) {
@@ -614,8 +675,17 @@ io.on('connection', (socket) => {
                     }
                 }
             }
+
+            // 🧹 limpiar mutedRelations SOLO si hay userId
+            mutedRelations.delete(user.userId);
+
+            for (const set of mutedRelations.values()) {
+                set.delete(user.userId);
+            }
         }
+
         socketToUser.delete(socket.id);
+
         console.log(`Socket desconectado: ${socket.id}`);
 
         scheduleListaUpdate();

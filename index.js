@@ -21,7 +21,7 @@ async function connectRabbitMQ() {
         for (const queue of queues) {
             // Aseguramos que la cola existe
             await channel.assertQueue(queue, { durable: true });
-            
+
             console.log(`[*] Escuchando en: ${queue}`);
 
             channel.consume(queue, (msg) => {
@@ -143,11 +143,11 @@ const Advertencia = mongoose.model('Warning', new mongoose.Schema({
 
 // ─── FILTRO DE PALABRAS ───────────────────────────────────────────────────────
 const PALABRAS_BANEADAS = [
-    "tonto","feo","spam","maldito","idiota","estupido","imbecil","bobada",
-    "mierda","puta","puto","cabron","hijueputa","hp","culero","pendejo",
-    "maricon","hdp","gonorrea","malparido","mongolo","retrasado","inutil",
-    "bastardo","desgraciado","subnormal","gilipollas","cagada","perra","zorra",
-    "fuck","shit","bitch","asshole","crap","idiot","moron","loser","damn",
+    "tonto", "feo", "spam", "maldito", "idiota", "estupido", "imbecil", "bobada",
+    "mierda", "puta", "puto", "cabron", "hijueputa", "hp", "culero", "pendejo",
+    "maricon", "hdp", "gonorrea", "malparido", "mongolo", "retrasado", "inutil",
+    "bastardo", "desgraciado", "subnormal", "gilipollas", "cagada", "perra", "zorra",
+    "fuck", "shit", "bitch", "asshole", "crap", "idiot", "moron", "loser", "damn",
 ];
 
 function procesarMensaje(texto) {
@@ -375,7 +375,7 @@ io.on('connection', (socket) => {
         msg.texto = textoFiltrado;
         msg.username = username;
         msg.userId = userId;
-        
+
         // Persistir mensaje en MongoDB
         try {
             await new Mensaje({ fightId, userId, username, texto: textoFiltrado }).save();
@@ -385,12 +385,12 @@ io.on('connection', (socket) => {
 
         emitToAuthorized('chat message', msg);
 
-         // Gestionar infracción
+        // Gestionar infracción
         if (huboInfraccion) {
             const prev = warningCount.get(userId) || 0;
             const next = prev + 1;
             warningCount.set(userId, next);
-            
+
             // Persistir advertencia
             try {
                 await new Advertencia({ fightId, userId, username, texto: msg.texto, count: next }).save();
@@ -408,7 +408,7 @@ io.on('connection', (socket) => {
                 max: MAX_WARNINGS,
                 mensaje: mensajeAdvertencia
             });
-            
+
             // Notificar al infractor
             socket.emit('notificacion_sistema', `Advertencia ${next}/${MAX_WARNINGS}: lenguaje inapropiado detectado.`);
 
@@ -440,6 +440,26 @@ io.on('connection', (socket) => {
         } catch (e) {
             console.error("[DB] Error al guardar reporte:", e.message);
         }
+    });
+    // ── SILENCIAR USUARIO (MANUAL) ────────────────────────────────────────
+    socket.on('silenciar_usuario', ({ targetSocketId }) => {
+        if (!partidaIniciada || !isAuthorizedSocket(socket.id)) {
+            socket.emit('voice_access_denied', { reason: 'No autorizado para silenciar.' });
+            return;
+        }
+
+        if (!targetSocketId) return;
+
+        const user = getUserFromSocket(socket.id);
+        const targetUser = getUserFromSocket(targetSocketId);
+
+        console.log(`[MOD] ${user?.username} silenció a ${targetUser?.username}`);
+
+        // Enviar comando de silencio al objetivo
+        io.to(targetSocketId).emit('comando_silenciar', targetSocketId);
+
+        // Feedback al que ejecuta el comando
+        socket.emit('notificacion_sistema', `🔇 Has silenciado a ${targetUser?.username || 'usuario'}`);
     });
 
     // ── WEBRTC SIGNALING ──────────────────────────────────────────────────
@@ -532,7 +552,7 @@ io.on('connection', (socket) => {
             warningCount.clear();
             console.log(`[SOCKET] Partida activada. fightId=${fightId}`);
         }
-        
+
         // Solo jugadores van a authorizedPlayers (pueden hablar y escribir)
         if (isPlayer) {
             if (!authorizedPlayers.has(effectiveUserId)) {
@@ -643,7 +663,7 @@ server.listen(PORT, '0.0.0.0', async () => {
     console.log(`\n🚀 Servidor ejecutándose en: http://localhost:${PORT}`);
     console.log(`📡 Puerto detectado: ${process.env.PORT || 'Usando default 3030'}`);
     console.log(`🎮 Estado inicial: ${partidaIniciada ? 'ACTIVO' : 'ESPERANDO PARTIDA'}\n`);
-    
+
     // Iniciamos RabbitMQ DESPUÉS de que el servidor y socket.io estén listos
     await connectRabbitMQ();
 });

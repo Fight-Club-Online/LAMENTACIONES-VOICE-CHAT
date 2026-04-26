@@ -497,57 +497,25 @@ io.on('connection', (socket) => {
         io.to(targetSocketId).emit('comando_silenciar', targetSocketId);
         socket.emit('notificacion_sistema', `🔇 Has silenciado a ${targetUser?.username || 'usuario'}`);
     });
-
+    
     socket.on('mute_user', ({ targetUserId }) => {
         const fromUser = getUserFromSocket(socket.id);
-
         if (!fromUser?.userId || !targetUserId) return;
         if (fromUser.userId === targetUserId) return;
-
-        // Crear set si no existe
+        
         if (!mutedRelations.has(fromUser.userId)) {
             mutedRelations.set(fromUser.userId, new Set());
         }
-
         const mySet = mutedRelations.get(fromUser.userId);
-
         const willMute = !mySet.has(targetUserId);
+        
+        if (willMute) mySet.add(targetUserId);
+        else mySet.delete(targetUserId);
 
-        if (willMute) {
-            mySet.add(targetUserId);
-
-            // mutuo
-            if (!mutedRelations.has(targetUserId)) {
-                mutedRelations.set(targetUserId, new Set());
-            }
-            mutedRelations.get(targetUserId).add(fromUser.userId);
-
-        } else {
-            mySet.delete(targetUserId);
-
-            if (mutedRelations.has(targetUserId)) {
-                mutedRelations.get(targetUserId).delete(fromUser.userId);
-            }
-        }
-
-        const targetSocket = getSocketByUserId(targetUserId);
-
-        // responder A
-        socket.emit('mute_updated', {
-            targetUserId,
-            muted: willMute
-        });
-
-        // responder B
-        if (targetSocket) {
-            targetSocket.emit('mute_updated', {
-                targetUserId: fromUser.userId,
-                muted: willMute
-            });
-        }
-
-        console.log(`[PAIR MUTE] ${fromUser.userId} <-> ${targetUserId}: ${willMute}`);
+        socket.emit('mute_updated', { targetUserId, muted: willMute });
+        console.log(`[MUTE] ${fromUser.userId} ${willMute ? 'silenció' : 'reactivó'} a ${targetUserId} (local)`);
     });
+
     // ── WEBRTC SIGNALING ──────────────────────────────────────────────────
     socket.on('rtc-offer', ({ toUserId, offer }) => {
         const ctx = getFightForSocket(socket.id);

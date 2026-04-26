@@ -65,19 +65,19 @@ const io = new Server(server, {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // ─── ESTADO GLOBAL MÍNIMO 
-const socketToUser  = new Map(); 
-const socketToFight = new Map(); 
+const socketToUser = new Map();
+const socketToFight = new Map();
 const mutedRelations = new Map();
 
 // ─── ESTADO POR SALA ──────────────────────────────────────────────────────────
-const fights = new Map(); 
+const fights = new Map();
 
 function getFight(fid) {
     if (!fights.has(fid)) {
         fights.set(fid, {
             authorizedPlayers: new Map(), // userId → { username, playerType, socketId }
-            connectedUsers:    new Map(), // userId → { username, playerType, socketId }
-            warningCount:      new Map(), // userId → número
+            connectedUsers: new Map(), // userId → { username, playerType, socketId }
+            warningCount: new Map(), // userId → número
             active: true
         });
     }
@@ -284,7 +284,7 @@ io.use((socket, next) => {
         const payload = jwt.verify(authToken, jwtSecret);
         const userId = payload.sub || payload.userId;
         if (userId) socketToUser.set(socket.id, { userId, username: String(userId) });
-    } catch (_) {}
+    } catch (_) { }
     return next();
 });
 
@@ -500,25 +500,54 @@ io.on('connection', (socket) => {
 
     socket.on('mute_user', ({ targetUserId }) => {
         const fromUser = getUserFromSocket(socket.id);
+
         if (!fromUser?.userId || !targetUserId) return;
+        if (fromUser.userId === targetUserId) return;
 
-        if (!mutedRelations.has(fromUser.userId)) mutedRelations.set(fromUser.userId, new Set());
-        const userMutedSet = mutedRelations.get(fromUser.userId);
-
-        if (userMutedSet.has(targetUserId)) {
-            userMutedSet.delete(targetUserId);
-            socket.emit('mute_updated', { targetUserId, muted: false });
-            const targetSocket = getSocketByUserId(targetUserId);
-            if (targetSocket) targetSocket.emit('mute_updated', { targetUserId: fromUser.userId, muted: false });
-        } else {
-            userMutedSet.add(targetUserId);
-            socket.emit('mute_updated', { targetUserId, muted: true });
-            const targetSocket = getSocketByUserId(targetUserId);
-            if (targetSocket) targetSocket.emit('mute_updated', { targetUserId: fromUser.userId, muted: true });
+        // Crear set si no existe
+        if (!mutedRelations.has(fromUser.userId)) {
+            mutedRelations.set(fromUser.userId, new Set());
         }
-        console.log(`[MUTE] ${fromUser.userId} <-> ${targetUserId}`);
-    });
 
+        const mySet = mutedRelations.get(fromUser.userId);
+
+        const willMute = !mySet.has(targetUserId);
+
+        if (willMute) {
+            mySet.add(targetUserId);
+
+            // mutuo
+            if (!mutedRelations.has(targetUserId)) {
+                mutedRelations.set(targetUserId, new Set());
+            }
+            mutedRelations.get(targetUserId).add(fromUser.userId);
+
+        } else {
+            mySet.delete(targetUserId);
+
+            if (mutedRelations.has(targetUserId)) {
+                mutedRelations.get(targetUserId).delete(fromUser.userId);
+            }
+        }
+
+        const targetSocket = getSocketByUserId(targetUserId);
+
+        // responder A
+        socket.emit('mute_updated', {
+            targetUserId,
+            muted: willMute
+        });
+
+        // responder B
+        if (targetSocket) {
+            targetSocket.emit('mute_updated', {
+                targetUserId: fromUser.userId,
+                muted: willMute
+            });
+        }
+
+        console.log(`[PAIR MUTE] ${fromUser.userId} <-> ${targetUserId}: ${willMute}`);
+    });
     // ── WEBRTC SIGNALING ──────────────────────────────────────────────────
     socket.on('rtc-offer', ({ toUserId, offer }) => {
         const ctx = getFightForSocket(socket.id);
@@ -583,7 +612,7 @@ io.on('connection', (socket) => {
     // ── DESCONEXIÓN ───────────────────────────────────────────────────────
     socket.on('disconnect', () => {
         const user = socketToUser.get(socket.id);
-        const fid  = socketToFight.get(socket.id);
+        const fid = socketToFight.get(socket.id);
 
         if (user && fid) {
             const fight = fights.get(fid);
@@ -655,4 +684,3 @@ server.listen(PORT, '0.0.0.0', async () => {
     console.log(`🎮 Estado inicial: sin peleas activas\n`);
     await connectRabbitMQ();
 });
-

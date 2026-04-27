@@ -433,7 +433,7 @@ io.on('connection', (socket) => {
             console.error("[DB] Error guardando mensaje:", e.message);
         }
 
-        emitToAuthorized(fight, fid, 'chat message', msg);
+        io.to(`fight:${fid}`).emit('chat message', msg);
 
         if (huboInfraccion) {
             const prev = fight.warningCount.get(userId) || 0;

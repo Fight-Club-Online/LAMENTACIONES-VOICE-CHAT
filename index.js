@@ -139,11 +139,25 @@ const Advertencia = mongoose.model('Warning', new mongoose.Schema({
 
 // ─── FILTRO DE PALABRAS ───────────────────────────────────────────────────────
 const PALABRAS_BANEADAS = [
+    // Español general
     "tonto", "feo", "spam", "maldito", "idiota", "estupido", "imbecil", "bobada",
     "mierda", "puta", "puto", "cabron", "hijueputa", "hp", "culero", "pendejo",
     "maricon", "hdp", "gonorrea", "malparido", "mongolo", "retrasado", "inutil",
     "bastardo", "desgraciado", "subnormal", "gilipollas", "cagada", "perra", "zorra",
-    "fuck", "shit", "bitch", "asshole", "crap", "idiot", "moron", "loser", "damn",
+    // Español Colombia / Latam
+    "guevon", "huevon", "paraco", "sapo", "mamon", "marica", "chimbo", "hijuemadre",
+    "verraco", "soplamocos", "cagon", "pirobo", "malparida", "ojete", "chimbada",
+    "canalla", "lambon", "zanahoria", "nojoda", "mameluco", "bobo", "bruto",
+    // Español España
+    "joder", "hostia", "cono", "capullo", "mamon", "hijo de puta",
+    "me cago", "follar", "putada",
+    // Ingles
+    "fuck", "shit", "bitch", "asshole", "damn", "crap", "idiot", "moron",
+    "loser", "bastard", "dumbass", "dickhead", "motherfucker", "prick",
+    "wanker", "twat", "cunt", "scumbag", "retard", "jerk", "douche",
+    "piss", "bollocks", "slut", "whore",
+    // Variaciones con caracteres sustituidos
+    "h1jueputa", "hij0eputa", "c4bron", "m1erda", "put4", "b1tch", "sh1t",
 ];
 
 function procesarMensaje(texto) {
@@ -439,27 +453,76 @@ io.on('connection', (socket) => {
             const prev = fight.warningCount.get(userId) || 0;
             const next = prev + 1;
             fight.warningCount.set(userId, next);
-
             try {
-                await new Advertencia({ fightId: fid, userId, username, texto: msg.texto, count: next }).save();
+                await new Advertencia({ fightId: fid, userId, username, texto: textoFiltrado, count: next }).save();
             } catch (e) {
                 console.error("[DB] Error guardando advertencia:", e.message);
             }
+            // Strike privado — solo al infractor
+            socket.emit('player_strike', { count: next, max: MAX_WARNINGS, userId, username });
 
-            const mensajeAdvertencia = `⚠️ ${username} recibió advertencia ${next}/${MAX_WARNINGS} por lenguaje inapropiado.`;
+            // Notificación genérica a la sala sin revelar quién
+            const mensajeAdvertencia = `⚠️ Un combatiente recibió advertencia ${next}/${MAX_WARNINGS}.`;
             emitToAuthorized(fight, fid, 'advertencia_sistema', {
                 userId, username, count: next, max: MAX_WARNINGS, mensaje: mensajeAdvertencia
             });
-
-            socket.emit('notificacion_sistema', `Advertencia ${next}/${MAX_WARNINGS}: lenguaje inapropiado detectado.`);
-
+            
+            socket.emit('notificacion_sistema', `Strike ${next}/${MAX_WARNINGS}: lenguaje inapropiado detectado.`);
+            
             if (next >= MAX_WARNINGS) {
+                io.to(`fight:${fid}`).emit('player_banned', {
+                    userId,
+                    username,
+                    fightId: fid,
+                    reason: 'infracciones_repetidas',
+                    timestamp: new Date().toISOString(),
+                });
                 emitToAuthorized(fight, fid, 'comando_silenciar', socket.id);
-                socket.emit('notificacion_sistema', "Tu micrófono ha sido desactivado permanentemente por reiteradas infracciones.");
-                console.log(`[MUTE] ${username} (${userId}) alcanzó ${MAX_WARNINGS} advertencias → silenciado`);
+                socket.emit('notificacion_sistema', "Tu micrófono ha sido desactivado permanentemente.");
+                console.log(`[BAN_EVENT] ${username} (${userId}) alcanzó ${MAX_WARNINGS} strikes → evento emitido`);
             }
         }
     });
+
+
+    // ── MODERACIÓN DE VOZ transcripción del cliente
+    socket.on('voice_transcript', async ({ userId, username, texto }) => {
+        const ctx = getFightForSocket(socket.id);
+        if (!ctx || !isAuthorizedSocket(socket.id, ctx.fight)) return;
+        if (!texto?.trim()) return;
+        
+        const { huboInfraccion } = procesarMensaje(texto);
+        if (!huboInfraccion) return;
+        
+        const { fid, fight } = ctx;
+        const prev = fight.warningCount.get(userId) || 0;
+        const next = prev + 1;
+        fight.warningCount.set(userId, next);
+        
+        console.log(`[VOICE_MOD] Infracción de voz detectada: "${texto}" → Strike ${next}/${MAX_WARNINGS} para ${username}`);
+        try {
+            await new Advertencia({ fightId: fid, userId, username, texto, count: next }).save();
+        } catch (e) {
+            console.error("[DB] Error guardando advertencia de voz:", e.message);
+        }
+        // Strike privado al infractor
+        socket.emit('player_strike', { count: next, max: MAX_WARNINGS, userId, username });
+        socket.emit('notificacion_sistema', `Strike ${next}/${MAX_WARNINGS} (voz): lenguaje inapropiado detectado.`);
+
+        if (next >= MAX_WARNINGS) {
+            io.to(`fight:${fid}`).emit('player_banned', {
+                userId,
+                username,
+                fightId: fid,
+                reason: 'infracciones_repetidas_voz',
+                timestamp: new Date().toISOString(),
+            });
+            emitToAuthorized(fight, fid, 'comando_silenciar', socket.id);
+            socket.emit('notificacion_sistema', "Tu micrófono ha sido desactivado permanentemente.");
+            console.log(`[BAN_EVENT_VOZ] ${username} baneado por voz tras ${MAX_WARNINGS} strikes`);
+        }
+    });
+
 
     // ── REPORTAR USUARIO ──────────────────────────────────────────────────
     socket.on('enviar_reporte', async ({ targetId, motivo }) => {

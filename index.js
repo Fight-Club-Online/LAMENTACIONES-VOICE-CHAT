@@ -134,6 +134,7 @@ const Advertencia = mongoose.model('Warning', new mongoose.Schema({
     username: String,
     texto: String,
     count: Number,
+    source: { type: String, enum: ['CHAT', 'VOICE'], default: 'CHAT' },
     timestamp: { type: Date, default: Date.now }
 }), 'WARNINGS');
 
@@ -454,7 +455,7 @@ io.on('connection', (socket) => {
             const next = prev + 1;
             fight.warningCount.set(userId, next);
             try {
-                await new Advertencia({ fightId: fid, userId, username, texto: textoFiltrado, count: next }).save();
+                await new Advertencia({ fightId: fid, userId, username, texto: textoFiltrado, count: next, source: 'CHAT' }).save();
             } catch (e) {
                 console.error("[DB] Error guardando advertencia:", e.message);
             }
@@ -486,12 +487,16 @@ io.on('connection', (socket) => {
 
 
     // ── MODERACIÓN DE VOZ transcripción del cliente
-    socket.on('voice_transcript', async ({ userId, username, texto }) => {
+    socket.on('voice_transcript', async ({ texto }) => {
         const ctx = getFightForSocket(socket.id);
         if (!ctx || !isAuthorizedSocket(socket.id, ctx.fight)) return;
         if (!texto?.trim()) return;
+        if (!ctx.fight.active) return;
         
-        const { huboInfraccion } = procesarMensaje(texto);
+        const user = getUserFromSocket(socket.id);
+        const userId   = user?.userId   || socket.id;
+        const username = user?.username || socket.id.substring(0, 8);
+        const { textoFiltrado, huboInfraccion } = procesarMensaje(texto);
         if (!huboInfraccion) return;
         
         const { fid, fight } = ctx;
@@ -501,7 +506,7 @@ io.on('connection', (socket) => {
         
         console.log(`[VOICE_MOD] Infracción de voz detectada: "${texto}" → Strike ${next}/${MAX_WARNINGS} para ${username}`);
         try {
-            await new Advertencia({ fightId: fid, userId, username, texto, count: next }).save();
+            await new Advertencia({ fightId: fid, userId, username, texto: textoFiltrado, count: next, source: 'VOICE' }).save();
         } catch (e) {
             console.error("[DB] Error guardando advertencia de voz:", e.message);
         }

@@ -424,7 +424,7 @@ io.on('connection', (socket) => {
     });
 
     // ── CHAT + MODERACIÓN ─────────────────────────────────────────────────
-    socket.on('chat_message', async (msg) => {
+    socket.on('chat message', async (msg) => {
         const ctx = getFightForSocket(socket.id);
 
         // Validar sala activa
@@ -480,7 +480,7 @@ io.on('connection', (socket) => {
         }
 
         // Emitir mensaje a toda la pelea
-        io.to(`fight:${fid}`).emit('chat_message', mensajeEnviar);
+        io.to(`fight:${fid}`).emit('chat message', mensajeEnviar);
 
         // Moderación por insultos
         if (huboInfraccion) {

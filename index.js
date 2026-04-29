@@ -480,7 +480,7 @@ io.on('connection', (socket) => {
         }
 
         // Emitir mensaje a toda la pelea
-        io.to(`fight:${fid}`).emit('chat message', mensajeEnviar);
+        io.to(`fight:${fid}`).emit('chat_message', mensajeEnviar);
 
         // Moderación por insultos
         if (huboInfraccion) {

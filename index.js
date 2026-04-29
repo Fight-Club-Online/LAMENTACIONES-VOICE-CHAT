@@ -424,7 +424,7 @@ io.on('connection', (socket) => {
     });
 
     // ── CHAT + MODERACIÓN ─────────────────────────────────────────────────
-    socket.on('chat message', async (msg) => {
+    socket.on('chat_message', async (msg) => {
         const ctx = getFightForSocket(socket.id);
 
         // Validar sala activa

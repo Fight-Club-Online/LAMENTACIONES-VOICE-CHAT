@@ -559,6 +559,19 @@ io.on('connection', (socket) => {
         const userId = user?.userId || socket.id;
         const username = user?.username || socket.id.substring(0, 8);
         const { textoFiltrado, huboInfraccion } = procesarMensaje(texto);
+        const { fid } = ctx;
+
+        try {
+            await new Mensaje({
+                fightId: fid,
+                userId,
+                username,
+                texto: textoFiltrado,
+                source: 'VOICE'
+            }).save();
+        } catch (e) {
+            console.error("[DB] Error guardando mensaje de voz:", e.message);
+        }
         if (!huboInfraccion) return;
 
         const { fid, fight } = ctx;
@@ -589,6 +602,8 @@ io.on('connection', (socket) => {
             console.log(`[BAN_EVENT_VOZ] ${username} baneado por voz tras ${MAX_WARNINGS} strikes`);
         }
     });
+
+
 
 
     // ── REPORTAR USUARIO ──────────────────────────────────────────────────

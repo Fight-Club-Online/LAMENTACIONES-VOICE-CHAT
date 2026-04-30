@@ -115,8 +115,11 @@ mongoose.connect(mongoURI)
 const Reporte = mongoose.model('Report', new mongoose.Schema({
     fightId: String,
     emisorId: String,
+    reporterUsername: { type: String, default: null },
     targetId: String,
+    reportedUsername: { type: String, default: null },
     motivo: String,
+    evidenceMessages: { type: Array, default: null },
     fecha: { type: Date, default: Date.now }
 }), 'REPORT');
 
@@ -125,6 +128,7 @@ const Mensaje = mongoose.model('Message', new mongoose.Schema({
     userId: String,
     username: String,
     texto: String,
+    source: { type: String, enum: ['CHAT', 'VOICE'], default: 'CHAT' },
     timestamp: { type: Date, default: Date.now }
 }), 'MESSAGES');
 
@@ -461,69 +465,130 @@ io.on('connection', (socket) => {
     // ── CHAT + MODERACIÓN ─────────────────────────────────────────────────
     socket.on('chat message', async (msg) => {
         const ctx = getFightForSocket(socket.id);
+
+        // Validar sala activa
         if (!ctx || !ctx.fight.active) {
-            socket.emit('notificacion_sistema', "El chat está deshabilitado hasta que inicie la partida.");
+            socket.emit(
+                'notificacion_sistema',
+                "El chat está deshabilitado hasta que inicie la partida."
+            );
             return;
         }
+
+        // Solo combatientes autorizados
         if (!isAuthorizedSocket(socket.id, ctx.fight)) {
-            socket.emit('voice_access_denied', { reason: 'Solo combatientes pueden usar el chat de pelea.' });
+            socket.emit(
+                'voice_access_denied',
+                { reason: 'Solo combatientes pueden usar el chat de pelea.' }
+            );
             return;
         }
-        if (!msg?.texto) return;
+
+        if (!msg?.texto?.trim()) return;
 
         const { fid, fight } = ctx;
+
         const user = getUserFromSocket(socket.id);
         const userId = user?.userId || socket.id;
         const username = user?.username || `Usuario-${socket.id.substring(0, 5)}`;
 
+        // Filtrar lenguaje ofensivo
         const { textoFiltrado, huboInfraccion } = procesarMensaje(msg.texto);
-        msg.texto = textoFiltrado;
-        msg.username = username;
-        msg.userId = userId;
 
+        // Objeto que se enviará al frontend
+        const mensajeEnviar = {
+            fightId: fid,
+            userId,
+            username,
+            texto: textoFiltrado,
+            source: 'CHAT',
+            timestamp: new Date()
+        };
+
+        // Guardar historial en MongoDB
         try {
-            await new Mensaje({ fightId: fid, userId, username, texto: textoFiltrado }).save();
+            await new Mensaje({
+                fightId: fid,
+                userId,
+                username,
+                texto: textoFiltrado,
+                source: 'CHAT'
+            }).save();
         } catch (e) {
             console.error("[DB] Error guardando mensaje:", e.message);
         }
 
-        io.to(`fight:${fid}`).emit('chat message', msg);
+        // Emitir mensaje a toda la pelea
+        io.to(`fight:${fid}`).emit('chat message', mensajeEnviar);
 
+        // Moderación por insultos
         if (huboInfraccion) {
             const prev = fight.warningCount.get(userId) || 0;
             const next = prev + 1;
+
             fight.warningCount.set(userId, next);
+
             try {
-                await new Advertencia({ fightId: fid, userId, username, texto: textoFiltrado, count: next, source: 'CHAT' }).save();
+                await new Advertencia({
+                    fightId: fid,
+                    userId,
+                    username,
+                    texto: textoFiltrado,
+                    count: next,
+                    source: 'CHAT'
+                }).save();
             } catch (e) {
                 console.error("[DB] Error guardando advertencia:", e.message);
             }
+            
             // Strike privado — solo al infractor
             socket.emit('player_strike', { count: next, max: MAX_WARNINGS, userId, username, source: 'CHAT' });
 
-            // Notificación genérica a la sala sin revelar quién
-            const mensajeAdvertencia = `⚠️ Un combatiente recibió advertencia ${next}/${MAX_WARNINGS}.`;
-            emitToAuthorized(fight, fid, 'advertencia_sistema', {
-                userId, username, count: next, max: MAX_WARNINGS, mensaje: mensajeAdvertencia
+            // Strike privado
+            socket.emit('player_strike', {
+                count: next,
+                max: MAX_WARNINGS,
+                userId,
+                username
             });
-            
-            socket.emit('notificacion_sistema', `Strike ${next}/${MAX_WARNINGS}: lenguaje inapropiado detectado.`);
-            
+
+            // Aviso general
+            emitToAuthorized(fight, fid, 'advertencia_sistema', {
+                userId,
+                username,
+                count: next,
+                max: MAX_WARNINGS,
+                mensaje: `⚠️ Un combatiente recibió advertencia ${next}/${MAX_WARNINGS}.`
+            });
+
+            socket.emit(
+                'notificacion_sistema',
+                `Strike ${next}/${MAX_WARNINGS}: lenguaje inapropiado detectado.`
+            );
+
+            // Ban automático
             if (next >= MAX_WARNINGS) {
                 io.to(`fight:${fid}`).emit('player_banned', {
                     userId,
                     username,
                     fightId: fid,
                     reason: 'infracciones_repetidas',
-                    timestamp: new Date().toISOString(),
+                    timestamp: new Date().toISOString()
                 });
+
                 emitToAuthorized(fight, fid, 'comando_silenciar', socket.id);
-                socket.emit('notificacion_sistema', "Tu micrófono ha sido desactivado permanentemente.");
-                console.log(`[BAN_EVENT] ${username} (${userId}) alcanzó ${MAX_WARNINGS} strikes → evento emitido`);
+
+                socket.emit(
+                    'notificacion_sistema',
+                    "Tu micrófono ha sido desactivado permanentemente."
+                );
+
+                console.log(
+                    `[BAN_EVENT] ${username} (${userId}) alcanzó ${MAX_WARNINGS} strikes`
+                );
             }
         }
     });
-
 
     // ── MODERACIÓN DE VOZ transcripción del cliente
     socket.on('voice_transcript', async ({ texto }) => {
@@ -531,20 +596,21 @@ io.on('connection', (socket) => {
         if (!ctx || !isAuthorizedSocket(socket.id, ctx.fight)) return;
         if (!texto?.trim()) return;
         if (!ctx.fight.active) return;
-        
+
         const user = getUserFromSocket(socket.id);
-        const userId   = user?.userId   || socket.id;
+        const userId = user?.userId || socket.id;
         const username = user?.username || socket.id.substring(0, 8);
         const entryVoice = ctx.fight.authorizedPlayers.get(userId);
         if (!entryVoice || entryVoice.playerType !== 'PLAYER') return;
         const { textoFiltrado, huboInfraccion } = procesarMensaje(texto);
-        if (!huboInfraccion) return;
         
+        if (!huboInfraccion) return;
+
         const { fid, fight } = ctx;
         const prev = fight.warningCount.get(userId) || 0;
         const next = prev + 1;
         fight.warningCount.set(userId, next);
-        
+
         console.log(`[VOICE_MOD] Infracción de voz detectada: "${texto}" → Strike ${next}/${MAX_WARNINGS} para ${username}`);
         try {
             await new Advertencia({ fightId: fid, userId, username, texto: textoFiltrado, count: next, source: 'VOICE' }).save();
@@ -569,29 +635,62 @@ io.on('connection', (socket) => {
         }
     });
 
+    
+
 
     // ── REPORTAR USUARIO ──────────────────────────────────────────────────
     socket.on('enviar_reporte', async ({ targetId, motivo }) => {
         const ctx = getFightForSocket(socket.id);
+
         if (!ctx || !isAuthorizedSocket(socket.id, ctx.fight)) {
-            socket.emit('voice_access_denied', { reason: 'Solo combatientes pueden reportar en pelea.' });
+            socket.emit('voice_access_denied', {
+                reason: 'Solo combatientes pueden reportar en pelea.'
+            });
             return;
         }
+
         try {
             const user = getUserFromSocket(socket.id);
+
+            const reporterUsername = user?.username || null;
+
+            const targetSocketId = findSocketByUserId(targetId);
+            const targetUser = targetSocketId
+                ? getUserFromSocket(targetSocketId)
+                : null;
+
+            const reportedUsername = targetUser?.username || null;
+
+            const evidenceMessages = await Mensaje.find({
+                fightId: ctx.fid
+            })
+                .sort({ timestamp: -1 })
+                .limit(10)
+                .lean();
+
             await new Reporte({
                 fightId: ctx.fid,
                 emisorId: user?.userId || socket.id,
+                reporterUsername,
+
                 targetId,
-                motivo
+                reportedUsername,
+
+                motivo,
+                evidenceMessages
             }).save();
-            console.log(`[DB] Reporte guardado contra: ${targetId}`);
-            socket.emit('notificacion_sistema', "Reporte registrado con éxito.");
+
+            socket.emit(
+                'notificacion_sistema',
+                "Reporte registrado con éxito."
+            );
+
+            console.log(`[DB] Reporte guardado contra ${targetId}`);
+
         } catch (e) {
             console.error("[DB] Error al guardar reporte:", e.message);
         }
     });
-
     // ── SILENCIAR USUARIO (MANUAL) ────────────────────────────────────────
     socket.on('silenciar_usuario', ({ targetSocketId }) => {
         const ctx = getFightForSocket(socket.id);
@@ -606,18 +705,18 @@ io.on('connection', (socket) => {
         io.to(targetSocketId).emit('comando_silenciar', targetSocketId);
         socket.emit('notificacion_sistema', `🔇 Has silenciado a ${targetUser?.username || 'usuario'}`);
     });
-    
+
     socket.on('mute_user', ({ targetUserId }) => {
         const fromUser = getUserFromSocket(socket.id);
         if (!fromUser?.userId || !targetUserId) return;
         if (fromUser.userId === targetUserId) return;
-        
+
         if (!mutedRelations.has(fromUser.userId)) {
             mutedRelations.set(fromUser.userId, new Set());
         }
         const mySet = mutedRelations.get(fromUser.userId);
         const willMute = !mySet.has(targetUserId);
-        
+
         if (willMute) mySet.add(targetUserId);
         else mySet.delete(targetUserId);
 

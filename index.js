@@ -289,6 +289,38 @@ app.get("/api/status", (req, res) => {
     res.json({ fights: status });
 });
 
+// Historial completo de infracciones de un jugador para módulo de supervisión
+app.get("/api/advertencias/usuario/:userId", async (req, res) => {
+    try {
+        const advertencias = await Advertencia.find({ userId: req.params.userId })
+            .sort({ timestamp: -1 })
+            .limit(200);
+        res.json({
+            userId: req.params.userId,
+            totalInfracciones: advertencias.length,
+            porFuente: {
+                CHAT: advertencias.filter(a => a.source === 'CHAT').length,
+                VOICE: advertencias.filter(a => a.source === 'VOICE').length,
+            },
+            historial: advertencias
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Advertencias por pelea supervisión en tiempo real de una partida
+app.get("/api/advertencias/:fid", async (req, res) => {
+    try {
+        const advertencias = await Advertencia.find({ fightId: req.params.fid })
+            .sort({ timestamp: 1 })
+            .limit(500);
+        res.json(advertencias);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // ─── SOCKET.IO AUTH ──────────────────────────────────────────────────────────
 io.use((socket, next) => {
     if (!jwtSecret) return next();
@@ -371,6 +403,13 @@ io.on('connection', (socket) => {
         }
 
         scheduleListaUpdate(fid, 400);
+
+        const strikesActivos = fight.warningCount.get(effectiveUserId) || 0;
+        if (strikesActivos >= MAX_WARNINGS) {
+            socket.emit('player_strike', { count: strikesActivos, max: MAX_WARNINGS, userId: effectiveUserId, username: displayName });
+            socket.emit('comando_silenciar', socket.id);
+            socket.emit('notificacion_sistema', 'Tu micrófono sigue bloqueado por infracciones anteriores.');
+        }
         console.log(`[JOIN_FIGHT] ${displayName} (${effectiveUserId}) [${isPlayer ? 'PLAYER' : 'SPECTATOR'}] → fightId=${fid}`);
     });
 
@@ -460,7 +499,7 @@ io.on('connection', (socket) => {
                 console.error("[DB] Error guardando advertencia:", e.message);
             }
             // Strike privado — solo al infractor
-            socket.emit('player_strike', { count: next, max: MAX_WARNINGS, userId, username });
+            socket.emit('player_strike', { count: next, max: MAX_WARNINGS, userId, username, source: 'CHAT' });
 
             // Notificación genérica a la sala sin revelar quién
             const mensajeAdvertencia = `⚠️ Un combatiente recibió advertencia ${next}/${MAX_WARNINGS}.`;
@@ -496,6 +535,8 @@ io.on('connection', (socket) => {
         const user = getUserFromSocket(socket.id);
         const userId   = user?.userId   || socket.id;
         const username = user?.username || socket.id.substring(0, 8);
+        const entryVoice = ctx.fight.authorizedPlayers.get(userId);
+        if (!entryVoice || entryVoice.playerType !== 'PLAYER') return;
         const { textoFiltrado, huboInfraccion } = procesarMensaje(texto);
         if (!huboInfraccion) return;
         
@@ -511,7 +552,7 @@ io.on('connection', (socket) => {
             console.error("[DB] Error guardando advertencia de voz:", e.message);
         }
         // Strike privado al infractor
-        socket.emit('player_strike', { count: next, max: MAX_WARNINGS, userId, username });
+        socket.emit('player_strike', { count: next, max: MAX_WARNINGS, userId, username, source: 'VOICE' });
         socket.emit('notificacion_sistema', `Strike ${next}/${MAX_WARNINGS} (voz): lenguaje inapropiado detectado.`);
 
         if (next >= MAX_WARNINGS) {

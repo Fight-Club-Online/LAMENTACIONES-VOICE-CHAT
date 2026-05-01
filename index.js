@@ -177,7 +177,8 @@ function procesarMensaje(texto) {
     let textoFiltrado = textoNorm;
     let huboInfraccion = false;
     PALABRAS_BANEADAS.forEach(palabra => {
-        const regex = new RegExp(`\\b${palabra}\\b`, 'gi');
+        const palabraNorm = normalizarTexto(palabra);
+        const regex = new RegExp(`\\b${palabraNorm}\\b`, 'gi');
         if (regex.test(textoFiltrado)) huboInfraccion = true;
         textoFiltrado = textoFiltrado.replace(regex, "****");
     });

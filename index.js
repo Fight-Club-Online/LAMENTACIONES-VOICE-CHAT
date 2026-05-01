@@ -415,6 +415,16 @@ io.on('connection', (socket) => {
 
         scheduleListaUpdate(fid, 400);
 
+        const activePlayers = [...fight.authorizedPlayers.values()].filter(p => p.socketId);
+        if (activePlayers.length >= 2) {
+            setTimeout(() => {
+                console.log(`[PEERS_READY] Ambos jugadores listos en fightId=${fid}`);
+                io.to(`fight:${fid}`).emit('peers_ready', {
+                    players: [...fight.authorizedPlayers.keys()]
+                });
+            }, 600); 
+        }
+
         const chatStrikes = fight.chatWarningCount.get(effectiveUserId) || 0;
         const voiceStrikes = fight.voiceWarningCount.get(effectiveUserId) || 0;
         if (chatStrikes >= MAX_WARNINGS) {

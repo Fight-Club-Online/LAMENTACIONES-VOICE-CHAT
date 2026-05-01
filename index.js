@@ -77,7 +77,9 @@ function getFight(fid) {
         fights.set(fid, {
             authorizedPlayers: new Map(), // userId → { username, playerType, socketId }
             connectedUsers: new Map(), // userId → { username, playerType, socketId }
-            warningCount: new Map(), // userId → número
+            warningCount: new Map(),
+            chatWarningCount: new Map(),
+            voiceWarningCount: new Map(),
             active: true
         });
     }
@@ -165,13 +167,18 @@ const PALABRAS_BANEADAS = [
     "h1jueputa", "hij0eputa", "c4bron", "m1erda", "put4", "b1tch", "sh1t",
 ];
 
+function normalizarTexto(t) {
+    return t ? t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase() : '';
+}
+
 function procesarMensaje(texto) {
     if (!texto) return { textoFiltrado: "", huboInfraccion: false };
-    let textoFiltrado = texto;
+    const textoNorm = normalizarTexto(texto);
+    let textoFiltrado = textoNorm;
     let huboInfraccion = false;
     PALABRAS_BANEADAS.forEach(palabra => {
         const regex = new RegExp(`\\b${palabra}\\b`, 'gi');
-        if (regex.test(texto)) huboInfraccion = true;
+        if (regex.test(textoFiltrado)) huboInfraccion = true;
         textoFiltrado = textoFiltrado.replace(regex, "****");
     });
     return { textoFiltrado, huboInfraccion };
@@ -408,9 +415,14 @@ io.on('connection', (socket) => {
 
         scheduleListaUpdate(fid, 400);
 
-        const strikesActivos = fight.warningCount.get(effectiveUserId) || 0;
-        if (strikesActivos >= MAX_WARNINGS) {
-            socket.emit('player_strike', { count: strikesActivos, max: MAX_WARNINGS, userId: effectiveUserId, username: displayName });
+        const chatStrikes = fight.chatWarningCount.get(effectiveUserId) || 0;
+        const voiceStrikes = fight.voiceWarningCount.get(effectiveUserId) || 0;
+        if (chatStrikes >= MAX_WARNINGS) {
+            socket.emit('player_strike', { count: chatStrikes, max: MAX_WARNINGS, source: 'CHAT', userId: effectiveUserId, username: displayName });
+            socket.emit('notificacion_sistema', 'Tu chat escrito sigue bloqueado por infracciones anteriores.');
+        }
+        if (voiceStrikes >= MAX_WARNINGS) {
+            socket.emit('player_strike', { count: voiceStrikes, max: MAX_WARNINGS, source: 'VOICE', userId: effectiveUserId, username: displayName });
             socket.emit('comando_silenciar', socket.id);
             socket.emit('notificacion_sistema', 'Tu micrófono sigue bloqueado por infracciones anteriores.');
         }
@@ -523,11 +535,10 @@ io.on('connection', (socket) => {
 
         // Moderación por insultos
         if (huboInfraccion) {
-            const prev = fight.warningCount.get(userId) || 0;
+            const prev = fight.chatWarningCount.get(userId) || 0;
             const next = prev + 1;
 
-            fight.warningCount.set(userId, next);
-
+            fight.chatWarningCount.set(userId, next);
             try {
                 await new Advertencia({
                     fightId: fid,
@@ -540,17 +551,9 @@ io.on('connection', (socket) => {
             } catch (e) {
                 console.error("[DB] Error guardando advertencia:", e.message);
             }
-            
+
             // Strike privado — solo al infractor
             socket.emit('player_strike', { count: next, max: MAX_WARNINGS, userId, username, source: 'CHAT' });
-
-            // Strike privado
-            socket.emit('player_strike', {
-                count: next,
-                max: MAX_WARNINGS,
-                userId,
-                username
-            });
 
             // Aviso general
             emitToAuthorized(fight, fid, 'advertencia_sistema', {
@@ -576,15 +579,33 @@ io.on('connection', (socket) => {
                     timestamp: new Date().toISOString()
                 });
 
-                emitToAuthorized(fight, fid, 'comando_silenciar', socket.id);
-
                 socket.emit(
                     'notificacion_sistema',
-                    "Tu micrófono ha sido desactivado permanentemente."
+                    "Tu chat escrito ha sido desactivado permanentemente por infracciones."
                 );
 
+                try {
+                    const evidenceMessages = await Mensaje.find({ fightId: fid })
+                    .sort({ timestamp: -1 }).limit(10).lean();
+                    const lastWarnings = await Advertencia.find({ fightId: fid, userId })
+                    .sort({ timestamp: -1 }).limit(5).lean();
+                    await new Reporte({
+                        fightId: fid,
+                        emisorId: 'SISTEMA',
+                        reporterUsername: 'AUTO_BAN',
+                        targetId: userId,
+                        reportedUsername: username,
+                        motivo: `Ban automático por ${MAX_WARNINGS} strikes de CHAT. Último texto: "${textoFiltrado}"`,
+                        evidenceMessages: [...evidenceMessages, ...lastWarnings],
+                        fecha: new Date()
+                    }).save();
+                    console.log(`[AUTO_REPORTE] Generado contra ${username} por ban de chat`);
+                } catch (e) {
+                    console.error('[AUTO_REPORTE] Error:', e.message);
+                }
+                
                 console.log(
-                    `[BAN_EVENT] ${username} (${userId}) alcanzó ${MAX_WARNINGS} strikes`
+                    `[BAN_EVENT] ${username} (${userId}) alcanzó ${MAX_WARNINGS} strikes de CHAT`
                 );
             }
         }
@@ -607,9 +628,9 @@ io.on('connection', (socket) => {
         if (!huboInfraccion) return;
 
         const { fid, fight } = ctx;
-        const prev = fight.warningCount.get(userId) || 0;
+        const prev = fight.voiceWarningCount.get(userId) || 0;
         const next = prev + 1;
-        fight.warningCount.set(userId, next);
+        fight.voiceWarningCount.set(userId, next);
 
         console.log(`[VOICE_MOD] Infracción de voz detectada: "${texto}" → Strike ${next}/${MAX_WARNINGS} para ${username}`);
         try {
@@ -629,8 +650,31 @@ io.on('connection', (socket) => {
                 reason: 'infracciones_repetidas_voz',
                 timestamp: new Date().toISOString(),
             });
+
             emitToAuthorized(fight, fid, 'comando_silenciar', socket.id);
-            socket.emit('notificacion_sistema', "Tu micrófono ha sido desactivado permanentemente.");
+
+            // Reporte automático por ban de voz
+            try {
+                const evidenceMessages = await Mensaje.find({ fightId: fid })
+                .sort({ timestamp: -1 }).limit(10).lean();
+                const lastWarnings = await Advertencia.find({ fightId: fid, userId })
+                .sort({ timestamp: -1 }).limit(5).lean();
+                await new Reporte({
+                    fightId: fid,
+                    emisorId: 'SISTEMA',
+                    reporterUsername: 'AUTO_BAN',
+                    targetId: userId,
+                    reportedUsername: username,
+                    motivo: `Ban automático por ${MAX_WARNINGS} strikes de VOZ. Último texto detectado: "${textoFiltrado}"`,
+                    evidenceMessages: [...evidenceMessages, ...lastWarnings],
+                    fecha: new Date()
+                }).save();
+                console.log(`[AUTO_REPORTE] Generado contra ${username} por ban de voz`);
+            } catch (e) {
+                console.error('[AUTO_REPORTE] Error:', e.message);
+            }
+            
+            socket.emit('notificacion_sistema', "Tu micrófono ha sido desactivado permanentemente por infracciones de voz.");
             console.log(`[BAN_EVENT_VOZ] ${username} baneado por voz tras ${MAX_WARNINGS} strikes`);
         }
     });
